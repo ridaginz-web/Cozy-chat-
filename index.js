@@ -627,7 +627,7 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     </div>`;
   }
 
-  // Авто-генерация уютной СМС от персонажа по тексту ролевого поста
+  // Авто-генерация короткой СМС от персонажа по тексту поста (если включен авто-режим)
   function buildAutoSmsData(rawText, profile) {
     const clean = rawText
       .replace(/\[(?:sms|chat|msg|vinyl):[\s\S]*?\]/gi, "")
@@ -635,88 +635,193 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       .trim();
 
     const mood = AUTO_SMS_MOODS.find((m) => m.re.test(clean)) || AUTO_SMS_MOODS[AUTO_SMS_MOODS.length - 1];
-
-    // Ищем прямую речь или яркое предложение из поста
-    const quotes = clean.match(/[«"“]([^»"”]{12,120})[»"”]/);
+    const quotes = clean.match(/[«"“]([^»"”]{8,120})[»"”]/);
     let quoteLine = "";
     if (quotes && quotes[1]) {
       quoteLine = quotes[1].trim();
     } else {
       const sentences = clean
         .split(/(?<=[.!?…])\s+/)
-        .filter((s) => s.length >= 20 && s.length <= 125);
+        .filter((s) => s.length >= 15 && s.length <= 120);
       quoteLine = sentences.length > 0
         ? sentences[sentences.length - 1]
-        : clean.slice(0, 95) + (clean.length > 95 ? "…" : "");
-    }
-
-    const h = hashText(clean);
-    const includePhoto = h % 2 === 0;
-
-    const messages = [];
-    if (includePhoto) {
-      messages.push({
-        sender: profile.charName,
-        isUser: false,
-        text: `[фото: ${mood.photoCaption}]`
-      });
-    }
-    messages.push({
-      sender: profile.charName,
-      isUser: false,
-      text: quoteLine
-    });
-    if (h % 3 === 0) {
-      messages.push({
-        sender: profile.charName,
-        isUser: false,
-        text: mood.followUp
-      });
+        : clean.slice(0, 90) + (clean.length > 90 ? "…" : "");
     }
 
     return {
       contactName: profile.charName,
       status: mood.status,
-      messages,
+      offline: Boolean(mood.offline),
+      messages: [
+        {
+          sender: profile.charName,
+          isUser: false,
+          text: quoteLine
+        }
+      ],
       showTyping: false
     };
   }
 
   const SMS_TAG_REGEX = /\[(?:sms|chat|смс):\s*([\s\S]+?)\](?!\s*—)/gi;
+  const IN_OUT_TEST_RE = /(?:^|\s|>)\(\s*(?:in|out|вх|исх)\s*\)/i;
+  const IN_OUT_LINE_RE = /^\(\s*(in|out|вх|исх)\s*\)\s*([\s\S]+)$/i;
+
+  // Группировка строк (in) и (out) прямо внутри ролевого поста с сохранением РП-текста вокруг
+  function renderInOutLinesInDom(el, profile, contextText = "") {
+    if (!IN_OUT_TEST_RE.test(el.textContent || "")) return false;
+
+    if (el.querySelectorAll("p").length === 0) {
+      const rawLines = (el.innerHTML || "")
+        .split(/(?:<br\s*\/?>|\r?\n)+/i)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      if (rawLines.length > 0) {
+        el.innerHTML = rawLines.map((l) => `<p>${l}</p>`).join("");
+      }
+    }
+
+    Array.from(el.querySelectorAll("p")).forEach((p) => {
+      if (!IN_OUT_TEST_RE.test(p.textContent || "")) return;
+      const html = p.innerHTML || "";
+      const hasBrOrNewline = /<br\s*\/?>|\r?\n/i.test(html);
+      const multipleMarkers = (p.textContent.match(/\(\s*(?:in|out|вх|исх)\s*\)/gi) || []).length > 1;
+      if (!hasBrOrNewline && !multipleMarkers) return;
+
+      const splitHtml = html
+        .replace(/(?!^)\s*(?=\(\s*(?:in|out|вх|исх)\s*\))/gi, "<br>")
+        .split(/(?:<br\s*\/?>|\r?\n)+/i)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      if (splitHtml.length <= 1) return;
+      const frag = document.createDocumentFragment();
+      splitHtml.forEach((lineHtml) => {
+        const newP = document.createElement("p");
+        newP.innerHTML = lineHtml;
+        frag.appendChild(newP);
+      });
+      p.replaceWith(frag);
+    });
+
+    const children = Array.from(el.childNodes);
+    let changed = false;
+    let groupNodes = [];
+    let groupMessages = [];
+    let groupTyping = false;
+
+    const sceneState = detectSceneStatus(contextText);
+
+    const flushGroup = () => {
+      if (groupNodes.length === 0 || groupMessages.length === 0) {
+        groupNodes = [];
+        groupMessages = [];
+        groupTyping = false;
+        return;
+      }
+      const phoneHtml = buildPhoneHtml(
+        {
+          contactName: profile.charName,
+          status: sceneState.status,
+          offline: sceneState.offline,
+          messages: groupMessages,
+          showTyping: groupTyping
+        },
+        profile
+      );
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = phoneHtml;
+      const phoneNode = wrapper.firstElementChild;
+      if (phoneNode) {
+        groupNodes[0].replaceWith(phoneNode);
+        for (let k = 1; k < groupNodes.length; k++) {
+          groupNodes[k].remove();
+        }
+        changed = true;
+      }
+      groupNodes = [];
+      groupMessages = [];
+      groupTyping = false;
+    };
+
+    for (let i = 0; i < children.length; i++) {
+      const node = children[i];
+
+      if (node.nodeType === 3 && !node.textContent.trim()) {
+        if (groupNodes.length > 0) {
+          groupNodes.push(node);
+        }
+        continue;
+      }
+
+      if (node.nodeType === 1 && node.tagName === "P") {
+        const txt = (node.textContent || "").trim();
+        if (!txt) {
+          if (groupNodes.length > 0) {
+            groupNodes.push(node);
+          }
+          continue;
+        }
+
+        const m = txt.match(IN_OUT_LINE_RE);
+        if (m) {
+          const dir = m[1].toLowerCase();
+          const isOut = dir === "out" || dir === "исх";
+          const msgBody = m[2].trim();
+          groupNodes.push(node);
+
+          if (/^(?:печатает|typing|\.{3}|…)$/i.test(msgBody) && !isOut) {
+            groupTyping = true;
+          } else {
+            groupMessages.push({
+              sender: isOut ? profile.userName : profile.charName,
+              isUser: isOut,
+              text: msgBody
+            });
+          }
+          continue;
+        }
+      }
+
+      flushGroup();
+    }
+
+    flushGroup();
+    return changed;
+  }
 
   function renderSmsInElement(el, mesEl = null) {
     if (!el) return false;
     const html = el.innerHTML || "";
     const text = el.textContent || "";
-    if (!/\[(?:sms|chat|смс):/i.test(html) && !/\[(?:sms|chat|смс):/i.test(text)) {
-      return false;
-    }
+    const hasTag = /\[(?:sms|chat|смс):/i.test(html) || /\[(?:sms|chat|смс):/i.test(text);
+    const hasInOut = IN_OUT_TEST_RE.test(text);
+
+    if (!hasTag && !hasInOut) return false;
 
     const profile = getTavernProfile(mesEl);
+    let rendered = false;
 
-    SMS_TAG_REGEX.lastIndex = 0;
-    if (SMS_TAG_REGEX.test(html)) {
-      SMS_TAG_REGEX.lastIndex = 0;
-      el.innerHTML = html.replace(SMS_TAG_REGEX, (_, payload) => {
-        const parsed = parseSmsTagPayload(cleanField(payload), profile);
-        return buildPhoneHtml(parsed, profile);
-      });
-      return true;
-    }
-
-    SMS_TAG_REGEX.lastIndex = 0;
-    if (SMS_TAG_REGEX.test(text)) {
-      SMS_TAG_REGEX.lastIndex = 0;
-      const match = SMS_TAG_REGEX.exec(text);
-      if (match) {
-        const [fullMatch, payload] = match;
-        const parsed = parseSmsTagPayload(payload, profile);
-        const phoneHtml = buildPhoneHtml(parsed, profile);
-        el.innerHTML = html.replace(escapeHtml(fullMatch), phoneHtml);
-        return true;
+    if (hasInOut) {
+      if (renderInOutLinesInDom(el, profile, text)) {
+        rendered = true;
       }
     }
-    return false;
+
+    if (hasTag) {
+      const currentHtml = el.innerHTML || "";
+      SMS_TAG_REGEX.lastIndex = 0;
+      if (SMS_TAG_REGEX.test(currentHtml)) {
+        SMS_TAG_REGEX.lastIndex = 0;
+        el.innerHTML = currentHtml.replace(SMS_TAG_REGEX, (_, payload) => {
+          const parsed = parseSmsTagPayload(cleanField(payload), profile, text);
+          return buildPhoneHtml(parsed, profile);
+        });
+        rendered = true;
+      }
+    }
+
+    return rendered;
   }
 
   function isDomStreamingNow() {
@@ -884,12 +989,12 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     playSmsSound("outgoing");
     input.value = "";
 
-    // Если это телефон внутри чата ST — отправляем СМС в поле ввода SillyTavern
+    // Если это телефон внутри чата ST — отправляем (out) СМС в поле ввода SillyTavern
     if (phoneEl.closest("#chat")) {
       const stTextarea = document.getElementById("send_textarea");
       const stSendBtn = document.getElementById("send_but");
       if (stTextarea && stSendBtn) {
-        const formatted = `[sms: ${contactName} | в сети 💌 | Я: ${text}]`;
+        const formatted = `(out) ${text}`;
         stTextarea.value = stTextarea.value
           ? `${stTextarea.value.trim()}\n${formatted}`
           : formatted;
@@ -964,21 +1069,7 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       return;
     }
 
-    // 6. Кнопка 📸 (вставить шаблон Polaroid-фото в поле быстрого ответа)
-    const photoBtn = e.target.closest(".st-cm-photo-btn");
-    if (photoBtn) {
-      e.stopPropagation();
-      const input = phone.querySelector(".st-cm-input");
-      if (input) {
-        if (!input.value.includes("[фото:")) {
-          input.value = `[фото: ${input.value || "Уютный кадр с телефона"}]`;
-        }
-        input.focus();
-      }
-      return;
-    }
-
-    // 7. Кнопка отправки СМС (➤)
+    // 6. Кнопка отправки СМС (➤)
     const sendBtn = e.target.closest(".st-cm-send");
     if (sendBtn) {
       e.stopPropagation();
@@ -1060,7 +1151,10 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
           </div>
 
           <div id="st_cm_preview" style="margin-top:10px;">
-            [sms: Уютный Контакт | в сети • 🌧️ у окна | Привет! Нажми на сообщение для реакции ❤️, погладь котика в шапке или включи голосовое ниже 👇 | [фото: Горячий латте и капли дождя на стекле] | [гс: Всё работает! Можешь даже написать ответ в нижней строке.] | Я: Какая красота ✨]
+            <p>(in) живот болит, зараза 😭</p>
+            <p>(out) уже еду с таблетками</p>
+            <p>(in) голосовое: 0:03</p>
+            <p>(out) голосовое: 0:06</p>
           </div>
 
           <div class="st-cm-shelf-box">
