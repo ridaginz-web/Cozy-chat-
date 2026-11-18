@@ -1,12 +1,17 @@
 (() => {
   const EXT_NAME = "st-cozy-messenger";
   const PROMPT_KEY = "cozy_messenger_prompt";
-  const DEFAULT_PROMPT = `When characters exchange text messages, or at the end of the response to show an atmospheric phone message from the character, include a Cozy Messenger widget using this exact format:
-[sms: Character Name | Status (e.g. в сети 🌙 / печатает...) | Character: Message text | Я: User reply (optional) | Character: [фото: Cozy description of photo] or [гс: Voice message transcript]]`;
+  const DEFAULT_PROMPT = `When characters send or receive text messages (SMS/messenger) in the roleplay, write each phone message on a separate line using this exact prefix format:
+(in) message from {{char}}
+(out) message from {{user}}
+For voice messages without text transcript, write:
+(in) голосовое: 0:04
+(out) голосовое: 0:06
+Use (in) and (out) ONLY for phone messages, while keeping normal narrative and spoken dialogue as regular text.`;
 
   const defaultSettings = {
-    enabled: false,
-    autoWidget: true,
+    enabled: true,
+    autoWidget: false,
     sound: true,
     volume: 0.4,
     compactMode: false,
@@ -39,44 +44,40 @@
 
   const AUTO_SMS_MOODS = [
     {
+      re: /недоступен|выключен|вне зоны|не в сети|не отвечал|сбросил|абонент|offline/i,
+      status: "не в сети • недоступен",
+      offline: true,
+      followUp: "Абонент временно недоступен"
+    },
+    {
       re: /дожд|ливень|гроз|гром|зонт|туч|окн|капл|rain|storm/i,
-      status: "в сети • 🌧️ у окна",
-      vibe: "vibe-rain",
-      icon: "🌧️",
-      photoCaption: "Капли дождя на запотевшем стекле и тёплый свет лампы",
-      followUp: "На улице такой ливень… Напиши, как доберёшься, ладно?"
+      status: "в сети • 🌧️ онлайн",
+      offline: false,
+      followUp: "На улице такой ливень… Напиши, как доберёшься."
     },
     {
       re: /кофе|чай|какао|кружк|латте|кафе|таверн|камин|кост[её]р|плед|уют|coffee|tea|cozy|fire/i,
-      status: "в сети • ☕ греет руки",
-      vibe: "vibe-cozy",
-      icon: "☕",
-      photoCaption: "Две кружки горячего чая и край тёплого пледа",
+      status: "в сети • ☕ онлайн",
+      offline: false,
       followUp: "Я взял нам кое-что горячее. Долго ещё будешь?"
     },
     {
       re: /ноч|лун|звезд|темнот|полноч|спать|сон|кроват|тишин|night|moon|sleep/i,
       status: "в сети • 🌙 не спит",
-      vibe: "vibe-night",
-      icon: "🌙",
-      photoCaption: "Ночные огни за окном и тишина пустой комнаты",
-      followUp: "Снова не спишь в такое время? Я тоже."
+      offline: false,
+      followUp: "Снова не спишь в такое время?"
     },
     {
-      re: /губ|объяти|нежн|сердц|люб|поцел|щек|румян|ладон|тепл|палат|бинт|kiss|love|heart/i,
-      status: "в сети • 💌 только для тебя",
-      vibe: "vibe-love",
-      icon: "💌",
-      photoCaption: "Случайный тёплый кадр, сохранённый в галерее на память",
-      followUp: "[гс: Просто хотел услышать твой голос. Не забывай беречь себя.]"
+      re: /губ|объяти|нежн|сердц|люб|поцел|щек|румян|ладон|тепл|палат|бинт|таблетк|болит|kiss|love|heart/i,
+      status: "в сети • 💌 онлайн",
+      offline: false,
+      followUp: "голосовое: 0:04"
     },
     {
       re: /.*/,
-      status: "в сети • ✨ онлайн",
-      vibe: "vibe-cozy",
-      icon: "📸",
-      photoCaption: "Атмосферный момент прямо сейчас",
-      followUp: "Подумал о тебе. Как ты там?"
+      status: "в сети • онлайн",
+      offline: false,
+      followUp: "Ты где?"
     }
   ];
 
@@ -379,45 +380,35 @@
   }
 
   // ============================================================================
-  // ПАРСИНГ СООБЩЕНИЙ, ФОТО POLAROID, ГС И СТИКЕРОВ
+  // ПАРСИНГ СООБЩЕНИЙ (IN) / (OUT), ГОЛОСОВЫХ И СТИКЕРОВ (БЕЗ ТЯЖЁЛЫХ ФОТО)
   // ============================================================================
-  function detectPolaroidVibe(text = "") {
-    if (/дожд|ливень|гроз|окн|капл|туч|rain|storm/i.test(text)) return { cls: "vibe-rain", icon: "🌧️" };
-    if (/ноч|лун|звезд|темн|сон|кроват|night|moon/i.test(text)) return { cls: "vibe-night", icon: "🌙" };
-    if (/люб|сердц|нежн|поцел|цвет|роз|love|heart/i.test(text)) return { cls: "vibe-love", icon: "💌" };
-    return { cls: "vibe-cozy", icon: "☕" };
+  function formatVoiceDuration(raw = "") {
+    const clean = String(raw || "").trim();
+    const timeMatch = clean.match(/(\d{1,2}:\d{2})/);
+    if (timeMatch) return timeMatch[1];
+    const secMatch = clean.match(/^(\d{1,2})\s*(?:с|сек|s|sec)?$/i);
+    if (secMatch) {
+      const s = Math.max(1, Math.min(59, parseInt(secMatch[1], 10)));
+      return `0:${s < 10 ? "0" + s : s}`;
+    }
+    return "0:04";
   }
 
   function renderBubbleContent(rawMsg = "") {
     const trimmed = rawMsg.trim();
 
-    // 1. Фото / Polaroid: [фото: описание] или [photo: url | caption]
-    const photoMatch = trimmed.match(/^\[(?:фото|photo|img|картинка):\s*([\s\S]+?)\]$/i);
-    if (photoMatch) {
-      const inner = photoMatch[1].trim();
-      const parts = inner.split("|").map((p) => p.trim());
-      const hasUrl = /^https?:\/\/|^\/|^data:image\//i.test(parts[0]);
-      if (hasUrl) {
-        const url = escapeHtml(parts[0]);
-        const cap = escapeHtml(parts[1] || "Фотография");
-        return `<div class="st-cm-polaroid"><img class="st-cm-polaroid-img" src="${url}" alt="Photo"><div class="st-cm-polaroid-caption">${cap}</div></div>`;
-      }
-      const cap = escapeHtml(inner);
-      const vibe = detectPolaroidVibe(inner);
-      return `<div class="st-cm-polaroid"><div class="st-cm-polaroid-art ${vibe.cls}"><span class="st-cm-polaroid-badge">INSTAX MINI</span><div class="st-cm-polaroid-icon">${vibe.icon}</div></div><div class="st-cm-polaroid-caption">${cap}</div></div>`;
-    }
-
-    // 2. Голосовое сообщение: [гс: текст] / [голос: текст] / [voice: текст]
-    const voiceMatch = trimmed.match(/^\[(?:гс|голос|voice|аудио|audio):\s*([\s\S]+?)\]$/i);
+    // 1. Голосовое сообщение в стиле Telegram (без расшифровки):
+    // голосовое: 0:03 | гс: 0:06 | voice: 0:12
+    const voiceMatch = trimmed.match(
+      /^\[?(?:голосовое(?:\s+сообщение)?|гс|голос|voice|аудио|audio)(?:\s*[:\-]\s*([\s\S]*?))?\]?$/i
+    );
     if (voiceMatch) {
-      const transcript = escapeHtml(voiceMatch[1].trim());
-      const secs = Math.max(3, Math.min(58, Math.round(transcript.length / 4)));
-      const dur = `0:${secs < 10 ? "0" + secs : secs}`;
-      return `<div class="st-cm-voice" title="Нажми, чтобы прослушать голосовое сообщение"><div class="st-cm-voice-play">▶</div><div class="st-cm-voice-waves"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><span style="font-size:11px;opacity:0.8;">${dur}</span></div><div class="st-cm-voice-transcript">«${transcript}»</div>`;
+      const dur = escapeHtml(formatVoiceDuration(voiceMatch[1] || "0:04"));
+      return `<div class="st-cm-voice" title="Нажми, чтобы прослушать голосовое"><div class="st-cm-voice-play">▶</div><div class="st-cm-voice-waves"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><span class="st-cm-voice-dur">${dur}</span></div>`;
     }
 
-    // 3. Стикер: [стикер: 🐾] / [sticker: 🐱]
-    const stickerMatch = trimmed.match(/^\[(?:стикер|sticker):\s*([\s\S]+?)\]$/i);
+    // 2. Стикер: стикер: 🐾 или [стикер: 🐾]
+    const stickerMatch = trimmed.match(/^\[?(?:стикер|sticker)\s*:\s*([\s\S]+?)\]?$/i);
     if (stickerMatch) {
       return `<div class="st-cm-sticker">${escapeHtml(stickerMatch[1].trim())}</div>`;
     }
@@ -429,6 +420,8 @@
     const s = sender.trim().toLowerCase();
     const u = String(userName || "").trim().toLowerCase();
     return (
+      s === "out" ||
+      s === "исх" ||
       s === "я" ||
       s === "me" ||
       s === "user" ||
@@ -439,53 +432,48 @@
     );
   }
 
-  // Парсинг содержимого тега [sms: ...]
-  function parseSmsTagPayload(payload, profile) {
+  function detectSceneStatus(contextText = "") {
+    const matched = AUTO_SMS_MOODS.find((m) => m.re.test(contextText)) || AUTO_SMS_MOODS[AUTO_SMS_MOODS.length - 1];
+    return {
+      status: matched.status,
+      offline: Boolean(matched.offline)
+    };
+  }
+
+  // Парсинг содержимого тега [sms: ...] (также поддерживает (in) и (out) внутри)
+  function parseSmsTagPayload(payload, profile, contextText = "") {
     const raw = String(payload || "").trim();
     const segments = raw.includes("|")
       ? raw.split("|").map((s) => s.trim()).filter(Boolean)
       : raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
 
+    const sceneState = detectSceneStatus(contextText);
     let contactName = profile.charName || "Собеседник";
-    let status = "в сети • онлайн";
+    let status = sceneState.status;
+    let offline = sceneState.offline;
     const messages = [];
     let showTyping = false;
 
     if (segments.length === 0) {
-      return { contactName, status, messages, showTyping };
+      return { contactName, status, offline, messages, showTyping };
     }
 
-    // Проверяем первые два сегмента на Заголовок (Имя контакта и Статус)
     let startIdx = 0;
     const first = segments[0];
 
-    if (first.includes("->") || first.includes("→")) {
-      const arrowParts = first.split(/->|→/).map((p) => cleanField(p));
-      const from = arrowParts[0] || contactName;
-      const to = arrowParts[1] || "";
-      const fromIsUser = isUserSender(from, profile.userName);
-      contactName = fromIsUser ? (to || profile.charName) : from;
-      status = fromIsUser ? "доставлено • в сети" : "в сети • онлайн";
-      startIdx = 1;
-      for (let i = startIdx; i < segments.length; i++) {
-        messages.push({
-          sender: from,
-          isUser: fromIsUser,
-          text: segments[i]
-        });
-      }
-      return { contactName, status, messages, showTyping };
-    }
-
-    if (!first.includes(":") || /^[^:]{1,28}$/.test(first)) {
-      contactName = cleanField(first) || contactName;
-      startIdx = 1;
-      if (
-        segments.length > 2 &&
-        (!segments[1].includes(":") || /в сети|онлайн|online|печатает|typing|был|недавно|🌙|☕|🌧|✨|💌/i.test(segments[1]))
-      ) {
-        status = cleanField(segments[1]);
-        startIdx = 2;
+    if (!/^\(\s*(?:in|out|вх|исх)\s*\)/i.test(first)) {
+      if (!first.includes(":") || /^[^:]{1,28}$/.test(first)) {
+        contactName = cleanField(first) || contactName;
+        startIdx = 1;
+        if (
+          segments.length > 2 &&
+          !/^\(\s*(?:in|out|вх|исх)\s*\)/i.test(segments[1]) &&
+          (!segments[1].includes(":") || /в сети|онлайн|online|недоступен|выключен|печатает|typing|был|недавно|🌙|☕|🌧|✨|💌/i.test(segments[1]))
+        ) {
+          status = cleanField(segments[1]);
+          offline = /недоступен|выключен|не в сети|offline/i.test(status);
+          startIdx = 2;
+        }
       }
     }
 
@@ -498,8 +486,25 @@
         continue;
       }
 
+      const inOutMatch = seg.match(/^\(\s*(in|out|вх|исх)\s*\)\s*([\s\S]+)$/i);
+      if (inOutMatch) {
+        const dir = inOutMatch[1].toLowerCase();
+        const isOut = dir === "out" || dir === "исх";
+        const body = inOutMatch[2].trim();
+        if (/^(?:печатает|typing|\.{3}|…)$/i.test(body) && !isOut) {
+          showTyping = true;
+          continue;
+        }
+        messages.push({
+          sender: isOut ? profile.userName : contactName,
+          isUser: isOut,
+          text: body
+        });
+        continue;
+      }
+
       const prefixMatch = seg.match(/^([^:\[\]]{1,28}):\s*([\s\S]+)$/);
-      if (prefixMatch) {
+      if (prefixMatch && !/^(?:голосовое|гс|голос|voice|аудио|audio|стикер|sticker)$/i.test(prefixMatch[1].trim())) {
         const sender = cleanField(prefixMatch[1]);
         const msgText = prefixMatch[2].trim();
         const userFlag = isUserSender(sender, profile.userName);
@@ -525,7 +530,7 @@
       });
     }
 
-    return { contactName, status, messages, showTyping };
+    return { contactName, status, offline, messages, showTyping };
   }
 
   function makeFavKey(contact = "", firstText = "") {
@@ -542,9 +547,10 @@
     const s = getSettings();
     const contactName = cleanField(data.contactName || profile.charName || "Собеседник");
     const status = cleanField(data.status || "в сети • онлайн");
+    const isOffline = Boolean(data.offline) || /недоступен|выключен|не в сети|offline/i.test(status);
     const messages = Array.isArray(data.messages) && data.messages.length > 0
       ? data.messages
-      : [{ sender: contactName, isUser: false, text: "Привет! Ты как?" }];
+      : [{ sender: contactName, isUser: false, text: "Ты где?" }];
 
     const firstSummary = cleanField(messages[0]?.text || "");
     const fav = isChatFavorited(contactName, firstSummary);
@@ -563,7 +569,7 @@
         const avatarHtml = !isUser
           ? `<img class="st-cm-mini-avatar" src="${charAvatar}" alt="av">`
           : "";
-        const checksHtml = isUser ? `<span class="st-cm-checks">✓✓</span>` : "";
+        const checksHtml = isUser ? `<span class="st-cm-checks">${isOffline ? "✓" : "✓✓"}</span>` : "";
         const bodyHtml = renderBubbleContent(m.text);
 
         return `<div class="st-cm-row ${rowCls}">${avatarHtml}<div class="st-cm-bubble ${rowCls}" title="Нажми на сообщение, чтобы поставить реакцию">${bodyHtml}<div class="st-cm-meta"><span>${timeStr}</span>${checksHtml}</div></div></div>`;
@@ -578,6 +584,7 @@
       JSON.stringify({
         contactName,
         status,
+        offline: isOffline,
         summary: firstSummary,
         messages
       })
@@ -592,7 +599,7 @@
       <div class="st-cm-header">
         <div class="st-cm-avatar-wrap">
           <img class="st-cm-avatar" src="${charAvatar}" alt="${escapeHtml(contactName)}">
-          <span class="st-cm-online-ring"></span>
+          <span class="st-cm-online-ring ${isOffline ? "is-offline" : ""}"></span>
         </div>
         <div class="st-cm-head-info">
           <div class="st-cm-name-row">
@@ -614,7 +621,6 @@
         ${typingHtml}
       </div>
       <div class="st-cm-footer" style="${s.showFooter === false ? "display:none;" : ""}">
-        <button type="button" class="st-cm-photo-btn" title="Прикрепить Polaroid-фото в СМС">📸</button>
         <input type="text" class="st-cm-input" placeholder="Написать СМС для ${escapeHtml(contactName)}...">
         <button type="button" class="st-cm-send" title="Отправить СМС">➤</button>
       </div>
