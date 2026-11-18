@@ -1,0 +1,836 @@
+/* ==========================================================================
+   📱 COZY MESSENGER FOR SILLYTAVERN (v1.0.0) — Hi-Fi & Atmospheric SMS Widget
+   7 Curated Themes: Liquid Glass (default), Velvet Noir, Retro Neon,
+   Midnight Lo-Fi, Warm Latte, Sakura Pink, Cozy Matcha
+   ========================================================================== */
+
+:root {
+  /* Default: 🧊 Liquid Glass */
+  --cm-bg: rgba(20, 25, 36, 0.72);
+  --cm-bg-grad: linear-gradient(155deg, rgba(34, 43, 62, 0.78) 0%, rgba(16, 20, 30, 0.86) 100%);
+  --cm-border: rgba(255, 255, 255, 0.16);
+  --cm-highlight: rgba(255, 255, 255, 0.25);
+  --cm-header-bg: rgba(255, 255, 255, 0.06);
+  --cm-footer-bg: rgba(14, 18, 27, 0.65);
+  --cm-them-bg: rgba(255, 255, 255, 0.11);
+  --cm-them-border: rgba(255, 255, 255, 0.14);
+  --cm-them-text: #f3f7ff;
+  --cm-me-bg: linear-gradient(135deg, rgba(116, 178, 255, 0.44), rgba(78, 134, 232, 0.34));
+  --cm-me-border: rgba(142, 197, 252, 0.42);
+  --cm-me-text: #ffffff;
+  --cm-accent: #8ec5fc;
+  --cm-accent-glow: rgba(142, 197, 252, 0.38);
+  --cm-sub: rgba(226, 236, 255, 0.64);
+  --cm-polaroid-bg: rgba(255, 255, 255, 0.94);
+  --cm-polaroid-text: #2c3545;
+  --cm-shadow: 0 16px 38px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+/* ☕ Warm Latte */
+body.st-cm-theme-latte {
+  --cm-bg: #fdf8f2;
+  --cm-bg-grad: linear-gradient(155deg, #fffcf8 0%, #f6ece0 100%);
+  --cm-border: rgba(212, 163, 115, 0.45);
+  --cm-highlight: rgba(255, 255, 255, 0.85);
+  --cm-header-bg: rgba(244, 231, 214, 0.85);
+  --cm-footer-bg: rgba(245, 233, 218, 0.92);
+  --cm-them-bg: #f3e8da;
+  --cm-them-border: rgba(212, 163, 115, 0.32);
+  --cm-them-text: #4a3525;
+  --cm-me-bg: linear-gradient(135deg, #d4a373, #bc8554);
+  --cm-me-border: rgba(188, 133, 84, 0.5);
+  --cm-me-text: #fffdf9;
+  --cm-accent: #b57c4a;
+  --cm-accent-glow: rgba(212, 163, 115, 0.35);
+  --cm-sub: #8c715c;
+  --cm-polaroid-bg: #fffdf9;
+  --cm-polaroid-text: #4a3525;
+  --cm-shadow: 0 12px 30px rgba(82, 58, 40, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* 🌸 Sakura Pink */
+body.st-cm-theme-pink {
+  --cm-bg: #fff6f9;
+  --cm-bg-grad: linear-gradient(155deg, #fffafd 0%, #fce8f0 100%);
+  --cm-border: rgba(244, 143, 177, 0.42);
+  --cm-highlight: rgba(255, 255, 255, 0.9);
+  --cm-header-bg: rgba(253, 232, 241, 0.88);
+  --cm-footer-bg: rgba(252, 230, 240, 0.92);
+  --cm-them-bg: #fbe0eb;
+  --cm-them-border: rgba(244, 143, 177, 0.32);
+  --cm-them-text: #573241;
+  --cm-me-bg: linear-gradient(135deg, #f48fb1, #e56b95);
+  --cm-me-border: rgba(229, 107, 149, 0.45);
+  --cm-me-text: #ffffff;
+  --cm-accent: #e0638e;
+  --cm-accent-glow: rgba(244, 143, 177, 0.38);
+  --cm-sub: #9c6c7e;
+  --cm-polaroid-bg: #fffcfd;
+  --cm-polaroid-text: #573241;
+  --cm-shadow: 0 12px 30px rgba(138, 68, 95, 0.14), inset 0 1px 0 #ffffff;
+}
+
+/* 🍵 Cozy Matcha */
+body.st-cm-theme-matcha {
+  --cm-bg: #f5f9f3;
+  --cm-bg-grad: linear-gradient(155deg, #fbfdf9 0%, #e7f0e2 100%);
+  --cm-border: rgba(132, 169, 140, 0.42);
+  --cm-highlight: rgba(255, 255, 255, 0.88);
+  --cm-header-bg: rgba(232, 242, 227, 0.88);
+  --cm-footer-bg: rgba(230, 240, 225, 0.92);
+  --cm-them-bg: #e2ecdc;
+  --cm-them-border: rgba(132, 169, 140, 0.3);
+  --cm-them-text: #2f4230;
+  --cm-me-bg: linear-gradient(135deg, #84a98c, #638b6b);
+  --cm-me-border: rgba(99, 139, 107, 0.45);
+  --cm-me-text: #ffffff;
+  --cm-accent: #5e8766;
+  --cm-accent-glow: rgba(132, 169, 140, 0.35);
+  --cm-sub: #687f69;
+  --cm-polaroid-bg: #fcfefb;
+  --cm-polaroid-text: #2f4230;
+  --cm-shadow: 0 12px 30px rgba(55, 82, 58, 0.13), inset 0 1px 0 #ffffff;
+}
+
+/* 🍷 Velvet Noir */
+body.st-cm-theme-noir {
+  --cm-bg: rgba(24, 13, 18, 0.92);
+  --cm-bg-grad: linear-gradient(155deg, rgba(40, 19, 27, 0.94) 0%, rgba(18, 10, 14, 0.96) 100%);
+  --cm-border: rgba(212, 175, 122, 0.32);
+  --cm-highlight: rgba(212, 175, 122, 0.22);
+  --cm-header-bg: rgba(48, 22, 32, 0.82);
+  --cm-footer-bg: rgba(26, 12, 18, 0.9);
+  --cm-them-bg: rgba(58, 30, 40, 0.86);
+  --cm-them-border: rgba(212, 175, 122, 0.22);
+  --cm-them-text: #f7e8ea;
+  --cm-me-bg: linear-gradient(135deg, #80263b, #571626);
+  --cm-me-border: rgba(212, 175, 122, 0.4);
+  --cm-me-text: #fdf0f2;
+  --cm-accent: #d4af7a;
+  --cm-accent-glow: rgba(212, 175, 122, 0.32);
+  --cm-sub: rgba(232, 206, 211, 0.62);
+  --cm-polaroid-bg: #26171d;
+  --cm-polaroid-text: #f3dce0;
+  --cm-shadow: 0 16px 38px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(212, 175, 122, 0.18);
+}
+
+/* 📼 Retro Neon */
+body.st-cm-theme-neon {
+  --cm-bg: rgba(15, 12, 34, 0.92);
+  --cm-bg-grad: linear-gradient(155deg, rgba(28, 20, 60, 0.94) 0%, rgba(12, 10, 28, 0.96) 100%);
+  --cm-border: rgba(255, 60, 172, 0.38);
+  --cm-highlight: rgba(0, 242, 254, 0.28);
+  --cm-header-bg: rgba(32, 22, 66, 0.84);
+  --cm-footer-bg: rgba(16, 12, 36, 0.92);
+  --cm-them-bg: rgba(42, 31, 82, 0.85);
+  --cm-them-border: rgba(0, 242, 254, 0.25);
+  --cm-them-text: #f3eeff;
+  --cm-me-bg: linear-gradient(135deg, #ff3cac, #784ba0);
+  --cm-me-border: rgba(255, 110, 199, 0.5);
+  --cm-me-text: #ffffff;
+  --cm-accent: #00f2fe;
+  --cm-accent-glow: rgba(0, 242, 254, 0.42);
+  --cm-sub: rgba(208, 196, 255, 0.66);
+  --cm-polaroid-bg: #1e163b;
+  --cm-polaroid-text: #f3eeff;
+  --cm-shadow: 0 16px 38px rgba(8, 4, 24, 0.6), 0 0 18px rgba(255, 60, 172, 0.14);
+}
+
+/* 🌙 Midnight Lo-Fi */
+body.st-cm-theme-dark {
+  --cm-bg: rgba(27, 24, 44, 0.92);
+  --cm-bg-grad: linear-gradient(155deg, rgba(40, 35, 64, 0.94) 0%, rgba(21, 18, 34, 0.96) 100%);
+  --cm-border: rgba(167, 139, 250, 0.3);
+  --cm-highlight: rgba(167, 139, 250, 0.22);
+  --cm-header-bg: rgba(44, 38, 68, 0.85);
+  --cm-footer-bg: rgba(24, 21, 38, 0.92);
+  --cm-them-bg: rgba(54, 47, 84, 0.88);
+  --cm-them-border: rgba(167, 139, 250, 0.22);
+  --cm-them-text: #efeaff;
+  --cm-me-bg: linear-gradient(135deg, #7c5dfa, #5c3fd6);
+  --cm-me-border: rgba(167, 139, 250, 0.45);
+  --cm-me-text: #ffffff;
+  --cm-accent: #a78bfa;
+  --cm-accent-glow: rgba(167, 139, 250, 0.35);
+  --cm-sub: rgba(212, 202, 248, 0.64);
+  --cm-polaroid-bg: #26213d;
+  --cm-polaroid-text: #efeaff;
+}
+
+/* ==========================================================================
+   PHONE CONTAINER & FRAME
+   ========================================================================== */
+
+.st-cm-phone {
+  position: relative;
+  width: 100%;
+  max-width: 365px;
+  margin: 12px 0;
+  background: var(--cm-bg-grad);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1.5px solid var(--cm-border);
+  border-radius: 26px;
+  box-shadow: var(--cm-shadow);
+  overflow: hidden;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color: var(--cm-them-text);
+  transition: transform 0.22s ease, box-shadow 0.22s ease;
+}
+
+.st-cm-phone::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 26px;
+  pointer-events: none;
+  box-shadow: inset 0 1px 1px var(--cm-highlight);
+  z-index: 2;
+}
+
+/* Top smartphone status bar + dynamic notch */
+.st-cm-statusbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 16px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cm-sub);
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.st-cm-island {
+  width: 66px;
+  height: 15px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.st-cm-island-lens {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #4f8df5 20%, #101b33 80%);
+}
+
+.st-cm-island-led {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 5px #4ade80;
+}
+
+/* ==========================================================================
+   MESSENGER HEADER & COZY CAT CHARM
+   ========================================================================== */
+
+.st-cm-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 10px;
+  background: var(--cm-header-bg);
+  border-bottom: 1px solid var(--cm-border);
+}
+
+.st-cm-avatar-wrap {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.st-cm-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.8px solid var(--cm-accent);
+  box-shadow: 0 2px 10px var(--cm-accent-glow);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.st-cm-online-ring {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #4ade80;
+  border: 2px solid #181c26;
+  box-shadow: 0 0 6px #4ade80;
+}
+
+.st-cm-head-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.st-cm-name-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.st-cm-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--cm-them-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.st-cm-drink-badge {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.st-cm-status {
+  font-size: 11.5px;
+  color: var(--cm-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+/* Cozy Cat Mascot on Phone Header */
+.st-cm-cat {
+  position: relative;
+  width: 30px;
+  height: 22px;
+  cursor: pointer;
+  flex-shrink: 0;
+  color: var(--cm-accent);
+  opacity: 0.92;
+  transition: transform 0.2s ease;
+}
+
+.st-cm-cat:hover {
+  transform: scale(1.08);
+}
+
+.st-cm-cat svg {
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+  overflow: visible;
+}
+
+.st-cm-cat .st-cat-tail {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  transform-origin: 6px 15px;
+  animation: stCmTailWag 3.2s ease-in-out infinite;
+}
+
+.st-cm-cat-heart {
+  position: absolute;
+  top: -8px;
+  right: 2px;
+  font-size: 11px;
+  color: #ff6b9d;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.st-cm-cat.is-purring .st-cm-cat-heart {
+  animation: stCmHeartFloat 0.95s ease-out forwards;
+}
+
+@keyframes stCmTailWag {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(14deg); }
+}
+
+@keyframes stCmHeartFloat {
+  0% { opacity: 0; transform: translateY(4px) scale(0.7); }
+  35% { opacity: 1; transform: translateY(-4px) scale(1.15); }
+  100% { opacity: 0; transform: translateY(-14px) scale(0.9); }
+}
+
+.st-cm-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.st-cm-fav-btn,
+.st-cm-sound-btn,
+.st-cm-mini-btn {
+  cursor: pointer;
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--cm-sub);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.st-cm-fav-btn:hover,
+.st-cm-sound-btn:hover,
+.st-cm-mini-btn:hover {
+  color: var(--cm-them-text);
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.st-cm-fav-btn.is-fav {
+  color: #ff6b9d;
+  border-color: rgba(255, 107, 157, 0.45);
+}
+
+/* ==========================================================================
+   MESSAGES BODY & BUBBLES
+   ========================================================================== */
+
+.st-cm-body {
+  padding: 12px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-height: 370px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.st-cm-date-pill {
+  align-self: center;
+  font-size: 10.5px;
+  color: var(--cm-sub);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--cm-border);
+  padding: 2px 10px;
+  border-radius: 12px;
+  margin-bottom: 2px;
+  user-select: none;
+}
+
+.st-cm-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  width: 100%;
+}
+
+.st-cm-row.is-user {
+  justify-content: flex-end;
+}
+
+.st-cm-row.is-char {
+  justify-content: flex-start;
+}
+
+.st-cm-mini-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--cm-border);
+  flex-shrink: 0;
+  margin-bottom: 2px;
+}
+
+.st-cm-bubble {
+  max-width: 79%;
+  padding: 9px 13px;
+  border-radius: 18px;
+  font-size: 13.5px;
+  line-height: 1.44;
+  position: relative;
+  cursor: pointer;
+  word-wrap: break-word;
+  transition: transform 0.14s ease, box-shadow 0.14s ease;
+  animation: stCmBubbleIn 0.24s cubic-bezier(0.2, 0.85, 0.35, 1);
+}
+
+@keyframes stCmBubbleIn {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.st-cm-bubble:active {
+  transform: scale(0.97);
+}
+
+.st-cm-bubble.is-char {
+  background: var(--cm-them-bg);
+  color: var(--cm-them-text);
+  border: 1px solid var(--cm-them-border);
+  border-bottom-left-radius: 5px;
+}
+
+.st-cm-bubble.is-user {
+  background: var(--cm-me-bg);
+  color: var(--cm-me-text);
+  border: 1px solid var(--cm-me-border);
+  border-bottom-right-radius: 5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.st-cm-sender-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--cm-accent);
+  margin-bottom: 2px;
+}
+
+.st-cm-text {
+  white-space: pre-wrap;
+}
+
+.st-cm-meta {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  opacity: 0.72;
+  margin-top: 4px;
+  user-select: none;
+}
+
+.st-cm-checks {
+  color: var(--cm-accent);
+  font-weight: 700;
+  letter-spacing: -1px;
+}
+
+.st-cm-bubble.is-user .st-cm-checks {
+  color: inherit;
+}
+
+/* Reaction Pill on Bubble */
+.st-cm-react {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 5px;
+  padding: 2px 7px;
+  border-radius: 12px;
+  font-size: 11.5px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  user-select: none;
+  animation: stCmBubbleIn 0.18s ease-out;
+}
+
+/* ==========================================================================
+   📸 POLAROID PHOTO & STYLED ATTACHMENTS INSIDE SMS
+   ========================================================================== */
+
+.st-cm-polaroid {
+  margin: 4px 0 2px;
+  padding: 7px 7px 9px;
+  background: var(--cm-polaroid-bg);
+  color: var(--cm-polaroid-text);
+  border-radius: 14px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.22);
+  max-width: 235px;
+  overflow: hidden;
+}
+
+.st-cm-polaroid-art {
+  position: relative;
+  width: 100%;
+  min-height: 118px;
+  border-radius: 10px;
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  background: linear-gradient(135deg, #3b4371 0%, #f3904f 100%);
+  color: #ffffff;
+  overflow: hidden;
+}
+
+.st-cm-polaroid-art.vibe-rain {
+  background: linear-gradient(145deg, #2c3e50 0%, #4ca1af 100%);
+}
+
+.st-cm-polaroid-art.vibe-cozy {
+  background: linear-gradient(145deg, #8e5431 0%, #e09f67 100%);
+}
+
+.st-cm-polaroid-art.vibe-night {
+  background: linear-gradient(145deg, #141e30 0%, #243b55 100%);
+}
+
+.st-cm-polaroid-art.vibe-love {
+  background: linear-gradient(145deg, #cc2b5e 0%, #753a88 100%);
+}
+
+.st-cm-polaroid-img {
+  width: 100%;
+  max-height: 190px;
+  object-fit: cover;
+  border-radius: 10px;
+  display: block;
+}
+
+.st-cm-polaroid-icon {
+  font-size: 32px;
+  margin-bottom: 5px;
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.28));
+}
+
+.st-cm-polaroid-badge {
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: rgba(0, 0, 0, 0.42);
+  color: #fff;
+  padding: 2px 7px;
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+}
+
+.st-cm-polaroid-caption {
+  margin-top: 7px;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 600;
+  text-align: center;
+  color: var(--cm-polaroid-text);
+}
+
+/* 🎙️ Voice Message Inside SMS */
+.st-cm-voice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 175px;
+  padding: 3px 0;
+}
+
+.st-cm-voice-play {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--cm-accent);
+  color: #161922;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px var(--cm-accent-glow);
+}
+
+.st-cm-voice-waves {
+  display: flex;
+  align-items: center;
+  gap: 2.5px;
+  height: 20px;
+  flex: 1;
+}
+
+.st-cm-voice-waves span {
+  display: block;
+  width: 3px;
+  border-radius: 3px;
+  background: currentColor;
+  opacity: 0.78;
+  animation: stCmWavePulse 1.2s ease-in-out infinite;
+}
+
+.st-cm-voice-waves span:nth-child(1) { height: 7px; animation-delay: 0s; }
+.st-cm-voice-waves span:nth-child(2) { height: 14px; animation-delay: 0.15s; }
+.st-cm-voice-waves span:nth-child(3) { height: 19px; animation-delay: 0.3s; }
+.st-cm-voice-waves span:nth-child(4) { height: 11px; animation-delay: 0.45s; }
+.st-cm-voice-waves span:nth-child(5) { height: 16px; animation-delay: 0.2s; }
+.st-cm-voice-waves span:nth-child(6) { height: 9px; animation-delay: 0.35s; }
+.st-cm-voice-waves span:nth-child(7) { height: 13px; animation-delay: 0.1s; }
+
+@keyframes stCmWavePulse {
+  0%, 100% { transform: scaleY(0.75); }
+  50% { transform: scaleY(1.18); }
+}
+
+.st-cm-voice-transcript {
+  font-size: 11.5px;
+  opacity: 0.86;
+  font-style: italic;
+  margin-top: 4px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.2);
+  padding-top: 4px;
+}
+
+/* 🐾 Large Sticker Inside SMS */
+.st-cm-sticker {
+  font-size: 46px;
+  line-height: 1.1;
+  padding: 4px 6px;
+  text-align: center;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.18));
+  user-select: none;
+}
+
+/* Typing dots row */
+.st-cm-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 12px;
+  border-radius: 15px;
+  background: var(--cm-them-bg);
+  border: 1px solid var(--cm-them-border);
+  align-self: flex-start;
+}
+
+.st-cm-typing span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--cm-sub);
+  animation: stCmTypingBounce 1.25s infinite ease-in-out;
+}
+
+.st-cm-typing span:nth-child(2) { animation-delay: 0.2s; }
+.st-cm-typing span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes stCmTypingBounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.45; }
+  40% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* ==========================================================================
+   QUICK-REPLY FOOTER & COMPACT MODE
+   ========================================================================== */
+
+.st-cm-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 11px 10px;
+  background: var(--cm-footer-bg);
+  border-top: 1px solid var(--cm-border);
+}
+
+.st-cm-photo-btn {
+  border: 1px solid var(--cm-border);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--cm-them-text);
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.st-cm-photo-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  transform: scale(1.06);
+}
+
+.st-cm-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid var(--cm-border);
+  border-radius: 18px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  color: var(--cm-them-text);
+  outline: none;
+}
+
+.st-cm-input::placeholder {
+  color: var(--cm-sub);
+}
+
+.st-cm-send {
+  border: none;
+  background: var(--cm-accent);
+  color: #151922;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 10px var(--cm-accent-glow);
+  transition: transform 0.15s ease;
+}
+
+.st-cm-send:hover {
+  transform: scale(1.07);
+}
+
+/* Compact Mode (Mini-Pill) */
+.st-cm-phone.is-compact .st-cm-statusbar,
+.st-cm-phone.is-compact .st-cm-body,
+.st-cm-phone.is-compact .st-cm-footer {
+  display: none !important;
+}
+
+.st-cm-phone.is-compact {
+  border-radius: 20px;
+}
+
+.st-cm-phone.is-compact .st-cm-header {
+  border-bottom: none;
+}
+
+/* ==========================================================================
+   SETTINGS DRAWER & SAVED CHATS SHELF
+   ========================================================================== */
+
+.st-cm-shelf-box {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.st-cm-shelf-header {
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.st-cm-shelf-empty {
+  font-size: 12px;
+  opacity: 0.75;
+  text-align: center;
+  padding: 10px 6px;
+}
