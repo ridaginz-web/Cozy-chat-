@@ -1,8 +1,33 @@
 (() => {
   const EXT_NAME = "st-cozy-messenger";
-  const LEGACY_PROMPT_KEY = "cozy_messenger_prompt";
+  const PROMPT_KEY = "cozy_messenger_prompt";
+
+  const STRICT_SMS_PROMPT = `[Phone & Messenger Formatting Rule — STRICT]
+Apply ONLY when {{char}} writes, sends, reads, or replies to messages on a phone/messenger/screen. This rule OVERRIDES general literary quote/dash dialogue rules («...» or — ...) ONLY for phone/messenger messages (keep face-to-face spoken dialogue and physical actions as normal literary prose):
+1. Fixed prefixes by character identity (regardless of 1st-person or 3rd-person POV):
+   - EVERY phone message written or sent by {{char}} MUST start on its own separate line with \`(in) \` — even when {{char}} is the one typing and pressing "send".
+   - \`(out) \` is strictly reserved for {{user}}'s phone messages. NEVER use \`(out)\` for {{char}}'s replies.
+2. STRICT NO-QUOTES & NO-DIRECT-SPEECH IN SMS:
+   - NEVER wrap phone message text in quotes («...», "...", “...”, '...').
+   - NEVER format phone messages as direct speech with dashes (— ...) or wrap \`(in)\` lines in italics/bold (*...*).
+   - NEVER place SMS text inside a narrative paragraph — always put a line break before and after each \`(in)\` line.
+   - Multiple separate SMS bubbles = multiple separate \`(in)\` lines.
+   - Voice message without transcript: \`(in) голосовое: 0:04\`
+   - Sticker/emoji bubble: \`(in) стикер: 🐾\`
+
+WRONG (forbidden when texting on phone):
+Набираю ответ одной рукой:
+«У тебя часы сломались? Чего не спишь?»
+Нажимаю «отправить».
+
+CORRECT (required when texting on phone):
+Набираю ответ одной рукой:
+(in) У тебя часы сломались?
+(in) Чего не спишь?
+Нажимаю «отправить».`;
 
   const defaultSettings = {
+    autoPrompt: true,
     sound: true,
     volume: 0.4,
     compactMode: false,
@@ -81,6 +106,9 @@
       ctx.extensionSettings[EXT_NAME] = { ...defaultSettings };
     }
     const s = ctx.extensionSettings[EXT_NAME];
+    if (s.autoPrompt === undefined) {
+      s.autoPrompt = s.enabled !== undefined ? Boolean(s.enabled) : true;
+    }
     for (const k of Object.keys(defaultSettings)) {
       if (s[k] === undefined) s[k] = defaultSettings[k];
     }
@@ -93,13 +121,25 @@
     return s;
   }
 
-  // Гарантированная очистка старого авто-промпта расширения (промпт живёт только в пресете пользователя)
-  function clearLegacyPrompt() {
+  // Инжект строгой инструкции формата (in) / (out) без кавычек и прямой речи
+  function updatePrompt() {
     const ctx = window.SillyTavern?.getContext?.();
-    if (typeof ctx?.setExtensionPrompt === "function") {
+    if (typeof ctx?.setExtensionPrompt !== "function") return;
+    const s = getSettings();
+    const active = s.autoPrompt !== false;
+    const charLabel = !isSystemName(ctx?.name2) ? ctx.name2.trim() : "{{char}}";
+    const userLabel = !isSystemName(ctx?.name1) ? ctx.name1.trim() : "{{user}}";
+    const promptValue = active
+      ? STRICT_SMS_PROMPT.replace(/\{\{char\}\}/g, charLabel).replace(/\{\{user\}\}/g, userLabel)
+      : "";
+    const pos = ctx.extension_prompt_types?.IN_CHAT ?? 1;
+    const role = ctx.extension_prompt_roles?.SYSTEM ?? 0;
+    try {
+      ctx.setExtensionPrompt(PROMPT_KEY, promptValue, pos, 0, false, role);
+    } catch (e) {
       try {
-        ctx.setExtensionPrompt(LEGACY_PROMPT_KEY, "", 1, 0);
-      } catch (e) {}
+        ctx.setExtensionPrompt(PROMPT_KEY, promptValue, 1, 0);
+      } catch (err) {}
     }
   }
 
@@ -470,8 +510,26 @@
     return `0:${estSec < 10 ? "0" + estSec : estSec}`;
   }
 
+  function sanitizeSmsText(raw = "") {
+    let s = String(raw || "").trim();
+    if (!s) return "";
+    // Убираем случайное тире прямой речи в начале СМС ("— Текст" -> "Текст")
+    s = s.replace(/^(?:—|–|-\s+)\s*/, "").trim();
+    // Убираем внешние парные кавычки вокруг всего СМС, если внутри нет других таких же кавычек
+    if (s.length >= 2) {
+      if (s.startsWith("«") && s.endsWith("»") && !/[«»]/.test(s.slice(1, -1))) {
+        s = s.slice(1, -1).trim();
+      } else if (s.startsWith("“") && s.endsWith("”") && !/[“”]/.test(s.slice(1, -1))) {
+        s = s.slice(1, -1).trim();
+      } else if (s.startsWith('"') && s.endsWith('"') && !s.slice(1, -1).includes('"')) {
+        s = s.slice(1, -1).trim();
+      }
+    }
+    return s;
+  }
+
   function renderBubbleContent(rawMsg = "") {
-    const trimmed = String(rawMsg || "").trim();
+    const trimmed = sanitizeSmsText(rawMsg);
 
     // 1. Голосовое сообщение в стиле Telegram: голосовое: 0:03 | гс: 0:06 | voice: 0:12
     const voiceMatch = trimmed.match(
@@ -793,8 +851,8 @@
     </div>`;
   }
 
-  const IN_OUT_TEST_RE = /(?:^|\s|>)\(\s*(?:in|out|вх|исх)\s*\)/i;
-  const IN_OUT_LINE_RE = /^\(\s*(in|out|вх|исх)\s*\)\s*([\s\S]+)$/i;
+  const IN_OUT_TEST_RE = /(?:^|\s|>|\*|_)\(\s*(?:in|out|вх|исх)\s*\)/i;
+  const IN_OUT_LINE_RE = /^(?:>\s*)?[\*_]*\(\s*(in|out|вх|исх)\s*\)[\*_]*\s*([\s\S]+)$/i;
 
   // Группировка строк (in) и (out) прямо внутри ролевого поста с сохранением РП-текста вокруг
   function renderInOutLinesInDom(el, profile, contextText = "", mesEl = null) {
@@ -1324,6 +1382,7 @@
           <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
+          <label class="checkbox_label"><input type="checkbox" id="st_cm_autoprompt" ${s.autoPrompt !== false ? "checked" : ""}><span>Авто-промпт для бота (строгий (in) / (out) без кавычек)</span></label>
           <label class="checkbox_label"><input type="checkbox" id="st_cm_sound" ${s.sound !== false ? "checked" : ""}><span>Звуки СМС, голосовых и мурчания котика</span></label>
           <label class="checkbox_label"><input type="checkbox" id="st_cm_mascot" ${s.cozyMascot !== false ? "checked" : ""}><span>🐾 Котик-маскот в шапке телефона</span></label>
           <label class="checkbox_label"><input type="checkbox" id="st_cm_footer" ${s.showFooter !== false ? "checked" : ""}><span>Строка быстрого ответа внизу экрана</span></label>
@@ -1366,9 +1425,13 @@
       const ctx = window.SillyTavern?.getContext?.();
       ctx?.saveSettingsDebounced?.();
       applyTheme();
-      clearLegacyPrompt();
+      updatePrompt();
     };
 
+    document.getElementById("st_cm_autoprompt")?.addEventListener("change", (e) => {
+      s.autoPrompt = e.target.checked;
+      save();
+    });
     document.getElementById("st_cm_sound")?.addEventListener("change", (e) => {
       s.sound = e.target.checked;
       save();
@@ -1451,10 +1514,16 @@
       es.on(et.CHAT_CHANGED, () => {
         hasCompletedInitialScan = false;
         notifiedMesSignatures.clear();
-        clearLegacyPrompt();
+        updatePrompt();
         observeChatContainer();
         refreshSettingsPreview();
         triggerScan();
+      });
+    }
+
+    if (et.GENERATION_STARTED) {
+      es.on(et.GENERATION_STARTED, () => {
+        updatePrompt();
       });
     }
 
@@ -1475,7 +1544,7 @@
   }
 
   function initMessengerExtension() {
-    clearLegacyPrompt();
+    updatePrompt();
     applyTheme();
     mountSettingsUi();
     registerTavernEvents();
