@@ -1,24 +1,16 @@
 (() => {
   const EXT_NAME = "st-cozy-messenger";
-  const PROMPT_KEY = "cozy_messenger_prompt";
-  const DEFAULT_PROMPT = `When characters send or receive text messages (SMS/messenger) in the roleplay, write each phone message on a separate line using this exact prefix format:
-(in) message from {{char}}
-(out) message from {{user}}
-For voice messages without text transcript, write:
-(in) голосовое: 0:04
-(out) голосовое: 0:06
-Use (in) and (out) ONLY for phone messages, while keeping normal narrative and spoken dialogue as regular text.`;
+  const LEGACY_PROMPT_KEY = "cozy_messenger_prompt";
 
   const defaultSettings = {
-    enabled: true,
-    autoWidget: false,
     sound: true,
     volume: 0.4,
     compactMode: false,
     cozyMascot: true,
     showFooter: true,
     theme: "glass",
-    favorites: []
+    favorites: [],
+    reactions: {}
   };
 
   const THEME_CLASSES = [
@@ -42,42 +34,36 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
 
   const REACTIONS = ["❤️", "🔥", "🐾", "🥺", "✨", "😂"];
 
-  const AUTO_SMS_MOODS = [
+  const SCENE_STATUS_RULES = [
     {
       re: /недоступен|выключен|вне зоны|не в сети|не отвечал|сбросил|абонент|offline/i,
       status: "не в сети • недоступен",
-      offline: true,
-      followUp: "Абонент временно недоступен"
+      offline: true
     },
     {
       re: /дожд|ливень|гроз|гром|зонт|туч|окн|капл|rain|storm/i,
       status: "в сети • 🌧️ онлайн",
-      offline: false,
-      followUp: "На улице такой ливень… Напиши, как доберёшься."
+      offline: false
     },
     {
       re: /кофе|чай|какао|кружк|латте|кафе|таверн|камин|кост[её]р|плед|уют|coffee|tea|cozy|fire/i,
       status: "в сети • ☕ онлайн",
-      offline: false,
-      followUp: "Я взял нам кое-что горячее. Долго ещё будешь?"
+      offline: false
     },
     {
       re: /ноч|лун|звезд|темнот|полноч|спать|сон|кроват|тишин|night|moon|sleep/i,
       status: "в сети • 🌙 не спит",
-      offline: false,
-      followUp: "Снова не спишь в такое время?"
+      offline: false
     },
     {
       re: /губ|объяти|нежн|сердц|люб|поцел|щек|румян|ладон|тепл|палат|бинт|таблетк|болит|kiss|love|heart/i,
       status: "в сети • 💌 онлайн",
-      offline: false,
-      followUp: "голосовое: 0:04"
+      offline: false
     },
     {
       re: /.*/,
       status: "в сети • онлайн",
-      offline: false,
-      followUp: "Ты где?"
+      offline: false
     }
   ];
 
@@ -98,8 +84,23 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     for (const k of Object.keys(defaultSettings)) {
       if (s[k] === undefined) s[k] = defaultSettings[k];
     }
+    delete s.autoWidget;
+    delete s.enabled;
     if (!Array.isArray(s.favorites)) s.favorites = [];
+    if (!s.reactions || typeof s.reactions !== "object" || Array.isArray(s.reactions)) {
+      s.reactions = {};
+    }
     return s;
+  }
+
+  // Гарантированная очистка старого авто-промпта расширения (промпт живёт только в пресете пользователя)
+  function clearLegacyPrompt() {
+    const ctx = window.SillyTavern?.getContext?.();
+    if (typeof ctx?.setExtensionPrompt === "function") {
+      try {
+        ctx.setExtensionPrompt(LEGACY_PROMPT_KEY, "", 1, 0);
+      } catch (e) {}
+    }
   }
 
   function escapeHtml(str = "") {
@@ -112,71 +113,152 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     }[m]));
   }
 
-  function cleanField(str = "") {
+  function decodeHtmlEntities(str = "") {
     return String(str)
-      .replace(/<[^>]*>/g, " ")
       .replace(/&nbsp;/gi, " ")
-      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
       .replace(/&quot;/gi, '"')
-      .replace(/&#39;/gi, "'")
+      .replace(/&#39;|&apos;/gi, "'")
+      .replace(/&#(\d+);/g, (_, dec) => {
+        const cp = parseInt(dec, 10);
+        return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : " ";
+      })
+      .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+        const cp = parseInt(hex, 16);
+        return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : " ";
+      })
+      .replace(/&amp;/gi, "&");
+  }
+
+  function cleanField(str = "") {
+    return decodeHtmlEntities(String(str).replace(/<[^>]*>/g, " "))
       .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function cleanMultilinePayload(str = "") {
+    return decodeHtmlEntities(
+      String(str)
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/<\/(?:p|div|li)>\s*<(?:p|div|li)[^>]*>/gi, "\n")
+        .replace(/<[^>]*>/g, "")
+    )
+      .split(/\r?\n/)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .join("\n")
       .trim();
   }
 
   function hashText(str = "") {
     let h = 2166136261;
-    const len = str.length;
-    const step = Math.max(1, Math.floor(len / 200));
+    const s = String(str);
+    const len = s.length;
+    const step = len > 2000 ? Math.floor(len / 2000) : 1;
     for (let i = 0; i < len; i += step) {
-      h ^= str.charCodeAt(i);
+      h ^= s.charCodeAt(i);
       h = Math.imul(h, 16777619) >>> 0;
     }
-    return h;
+    return h >>> 0;
+  }
+
+  function isSystemName(name = "") {
+    const trimmed = String(name || "").trim();
+    return !trimmed || /^sillytavern\s*system$/i.test(trimmed) || /^system$/i.test(trimmed);
   }
 
   // Получение реального имени и аватарки персонажа/игрока из SillyTavern
-  function getTavernProfile(mesEl = null) {
+  function getTavernProfile(mesEl = null, isPreview = false) {
     const ctx = window.SillyTavern?.getContext?.();
-    let charName = ctx?.name2 || "Собеседник";
-    let userName = ctx?.name1 || "Я";
+    const hasActiveChar = ctx && (ctx.characterId !== undefined && ctx.characterId !== null || Boolean(ctx.groupId));
+    let charName = !isSystemName(ctx?.name2) ? ctx.name2.trim() : "";
+    let userName = !isSystemName(ctx?.name1) ? ctx.name1.trim() : "Я";
     let charAvatar = "";
     let userAvatar = "";
 
     if (mesEl) {
-      const chNameEl = mesEl.querySelector(".ch_name .name_text, .name_text");
       const isUserMes = mesEl.getAttribute("is_user") === "true";
-      if (chNameEl && !isUserMes && chNameEl.textContent.trim()) {
-        charName = chNameEl.textContent.trim();
-      }
-      const avImg = mesEl.querySelector(".avatar img");
-      if (avImg && !isUserMes && avImg.getAttribute("src")) {
-        charAvatar = avImg.getAttribute("src");
-      }
-    }
-
-    if (!charAvatar) {
-      const lastCharImg = document.querySelector('#chat .mes[is_user="false"] .avatar img');
-      if (lastCharImg && lastCharImg.getAttribute("src")) {
-        charAvatar = lastCharImg.getAttribute("src");
-      } else if (ctx?.characters && ctx?.characterId !== undefined) {
-        const c = ctx.characters[ctx.characterId];
-        if (c?.avatar) {
-          charAvatar = `/characters/${encodeURIComponent(c.avatar)}`;
+      const isSysMes = mesEl.getAttribute("is_system") === "true";
+      if (!isUserMes && !isSysMes) {
+        const chNameEl = mesEl.querySelector(".ch_name .name_text, .name_text");
+        const candidateName = chNameEl?.textContent?.trim() || "";
+        if (!isSystemName(candidateName)) {
+          charName = candidateName;
+        }
+        const avImg = mesEl.querySelector(".avatar img");
+        if (avImg?.getAttribute("src")) {
+          charAvatar = avImg.getAttribute("src");
         }
       }
     }
 
-    const lastUserImg = document.querySelector('#chat .mes[is_user="true"] .avatar img');
-    if (lastUserImg && lastUserImg.getAttribute("src")) {
+    if (!isPreview || hasActiveChar) {
+      if (!charName) {
+        const charNameNodes = document.querySelectorAll('#chat .mes[is_user="false"]:not([is_system="true"]) .ch_name .name_text, #chat .mes[is_user="false"]:not([is_system="true"]) .name_text');
+        for (let i = charNameNodes.length - 1; i >= 0; i--) {
+          const candidate = charNameNodes[i].textContent?.trim() || "";
+          if (!isSystemName(candidate)) {
+            charName = candidate;
+            break;
+          }
+        }
+      }
+
+      if (!charAvatar) {
+        const charImgs = document.querySelectorAll('#chat .mes[is_user="false"]:not([is_system="true"]) .avatar img');
+        const lastCharImg = charImgs.length > 0 ? charImgs[charImgs.length - 1] : null;
+        if (lastCharImg?.getAttribute("src")) {
+          charAvatar = lastCharImg.getAttribute("src");
+        } else if (ctx?.characters && ctx?.characterId !== undefined && ctx?.characterId !== null) {
+          const c = ctx.characters[ctx.characterId];
+          if (c?.avatar) {
+            charAvatar = `/characters/${encodeURIComponent(c.avatar)}`;
+          }
+        }
+      }
+    }
+
+    const userImgs = document.querySelectorAll('#chat .mes[is_user="true"] .avatar img');
+    const lastUserImg = userImgs.length > 0 ? userImgs[userImgs.length - 1] : null;
+    if (lastUserImg?.getAttribute("src")) {
       userAvatar = lastUserImg.getAttribute("src");
     }
 
     return {
-      charName,
-      userName,
+      charName: charName || "Собеседник",
+      userName: userName || "Я",
       charAvatar: charAvatar || DEFAULT_CHAR_AVATAR,
       userAvatar: userAvatar || DEFAULT_CHAR_AVATAR
     };
+  }
+
+  function extractMesBaseTime(mesEl, seedStr = "") {
+    if (mesEl) {
+      const tsEl = mesEl.querySelector(".mes_block .timestamp, .timestamp");
+      const tsText = tsEl?.textContent || "";
+      const timeMatch = tsText.match(/(\b\d{1,2}):(\d{2})\b/);
+      if (timeMatch) {
+        let hh = parseInt(timeMatch[1], 10);
+        const mm = parseInt(timeMatch[2], 10);
+        if (/pm/i.test(tsText) && hh < 12) hh += 12;
+        if (/am/i.test(tsText) && hh === 12) hh = 0;
+        if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60) {
+          return { hour: hh, minute: mm };
+        }
+      }
+    }
+    const h = hashText(seedStr);
+    return {
+      hour: 19 + (h % 5),
+      minute: (h >>> 5) % 60
+    };
+  }
+
+  function formatTimeOffset(baseHour, baseMinute, offsetMinutes = 0) {
+    const total = ((baseHour * 60 + baseMinute + offsetMinutes) % 1440 + 1440) % 1440;
+    const hh = String(Math.floor(total / 60)).padStart(2, "0");
+    const mm = String(total % 60).padStart(2, "0");
+    return `${hh}:${mm}`;
   }
 
   function applyTheme() {
@@ -195,13 +277,6 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     document.querySelectorAll(".st-cm-footer").forEach((el) => {
       el.style.display = s.showFooter === false ? "none" : "";
     });
-  }
-
-  function updatePrompt() {
-    const ctx = window.SillyTavern?.getContext?.();
-    if (!ctx?.setExtensionPrompt) return;
-    const { enabled } = getSettings();
-    ctx.setExtensionPrompt(PROMPT_KEY, enabled ? DEFAULT_PROMPT : "", 1, 0);
   }
 
   // ============================================================================
@@ -246,10 +321,10 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     return Math.max(0.05, Math.min(1, v));
   }
 
-  // 🔔 Звук уведомления СМС / смены реакции
-  function playSmsSound(type = "incoming") {
+  // 🔔 Звук уведомления СМС / смены реакции / голосового
+  function playSmsSound(type = "incoming", forcePreview = false) {
     const s = getSettings();
-    if (!s.sound) return;
+    if (!forcePreview && !s.sound) return;
     const ctx = unlockAudioEngine();
     if (!ctx) return;
 
@@ -259,7 +334,7 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     master.connect(ctx.destination);
 
     if (type === "incoming") {
-      const notes = [587.33, 880.0]; // D5 -> A5 стеклянный колокольчик
+      const notes = [587.33, 880.0];
       notes.forEach((freq, i) => {
         const osc = ctx.createOscillator();
         const g = ctx.createGain();
@@ -300,7 +375,6 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       osc.start(now);
       osc.stop(now + 0.085);
     } else if (type === "voice") {
-      // 🎙️ Уютная Lo-Fi мелодия голосового сообщения
       const chords = [392.0, 493.88, 587.33, 659.25, 587.33, 493.88];
       chords.forEach((freq, i) => {
         const osc = ctx.createOscillator();
@@ -380,10 +454,11 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
   }
 
   // ============================================================================
-  // ПАРСИНГ СООБЩЕНИЙ (IN) / (OUT), ГОЛОСОВЫХ И СТИКЕРОВ (БЕЗ ТЯЖЁЛЫХ ФОТО)
+  // ПАРСИНГ СООБЩЕНИЙ (IN) / (OUT), ГОЛОСОВЫХ, СТИКЕРОВ И ТЕГА [SMS: ...]
   // ============================================================================
   function formatVoiceDuration(raw = "") {
     const clean = String(raw || "").trim();
+    if (!clean) return "0:04";
     const timeMatch = clean.match(/(\d{1,2}:\d{2})/);
     if (timeMatch) return timeMatch[1];
     const secMatch = clean.match(/^(\d{1,2})\s*(?:с|сек|s|sec)?$/i);
@@ -391,24 +466,29 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       const s = Math.max(1, Math.min(59, parseInt(secMatch[1], 10)));
       return `0:${s < 10 ? "0" + s : s}`;
     }
-    return "0:04";
+    const estSec = Math.max(2, Math.min(45, Math.round(clean.length / 11)));
+    return `0:${estSec < 10 ? "0" + estSec : estSec}`;
   }
 
   function renderBubbleContent(rawMsg = "") {
-    const trimmed = rawMsg.trim();
+    const trimmed = String(rawMsg || "").trim();
 
-    // 1. Голосовое сообщение в стиле Telegram (без расшифровки):
-    // голосовое: 0:03 | гс: 0:06 | voice: 0:12
+    // 1. Голосовое сообщение в стиле Telegram: голосовое: 0:03 | гс: 0:06 | voice: 0:12
     const voiceMatch = trimmed.match(
-      /^\[?(?:голосовое(?:\s+сообщение)?|гс|голос|voice|аудио|audio)(?:\s*[:\-]\s*([\s\S]*?))?\]?$/i
+      /^\[?(?:голосовое(?:\s+сообщение)?|гс|голос|voice(?:\s+message)?|аудио|audio)(?:\s*[:\-]\s*([\s\S]*?))?\]?$/i
     );
     if (voiceMatch) {
-      const dur = escapeHtml(formatVoiceDuration(voiceMatch[1] || "0:04"));
-      return `<div class="st-cm-voice" title="Нажми, чтобы прослушать голосовое"><div class="st-cm-voice-play">▶</div><div class="st-cm-voice-waves"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><span class="st-cm-voice-dur">${dur}</span></div>`;
+      const rawArg = (voiceMatch[1] || "").trim();
+      const dur = escapeHtml(formatVoiceDuration(rawArg));
+      const isPureTimer = !rawArg || /^\d{1,2}(?::\d{2}|\s*(?:с|сек|s|sec)?)?$/i.test(rawArg);
+      const hint = isPureTimer
+        ? "Нажми, чтобы прослушать голосовое"
+        : `Голосовое сообщение: ${rawArg}`;
+      return `<div class="st-cm-voice" title="${escapeHtml(hint)}"><div class="st-cm-voice-play">▶</div><div class="st-cm-voice-waves"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div><span class="st-cm-voice-dur">${dur}</span></div>`;
     }
 
     // 2. Стикер: стикер: 🐾 или [стикер: 🐾]
-    const stickerMatch = trimmed.match(/^\[?(?:стикер|sticker)\s*:\s*([\s\S]+?)\]?$/i);
+    const stickerMatch = trimmed.match(/^\[?(?:стикер|sticker)\s*[:\-]\s*([\s\S]+?)\]?$/i);
     if (stickerMatch) {
       return `<div class="st-cm-sticker">${escapeHtml(stickerMatch[1].trim())}</div>`;
     }
@@ -428,24 +508,71 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       s === "ты" ||
       s === "you" ||
       s === "{{user}}" ||
-      (u && s === u)
+      (Boolean(u) && s === u)
     );
   }
 
   function detectSceneStatus(contextText = "") {
-    const matched = AUTO_SMS_MOODS.find((m) => m.re.test(contextText)) || AUTO_SMS_MOODS[AUTO_SMS_MOODS.length - 1];
+    const matched = SCENE_STATUS_RULES.find((m) => m.re.test(contextText)) || SCENE_STATUS_RULES[SCENE_STATUS_RULES.length - 1];
     return {
       status: matched.status,
       offline: Boolean(matched.offline)
     };
   }
 
-  // Парсинг содержимого тега [sms: ...] (также поддерживает (in) и (out) внутри)
+  // Надёжный парсер тегов [sms: ...] с поддержкой вложенных скобок ([стикер: ...], [печатает])
+  function replaceSmsTags(htmlStr = "", replacer) {
+    const openRe = /\[(?:sms|chat|смс):\s*/gi;
+    let result = "";
+    let lastPos = 0;
+    let match;
+
+    while ((match = openRe.exec(htmlStr)) !== null) {
+      const startIdx = match.index;
+      const payloadStart = startIdx + match[0].length;
+      let depth = 1;
+      let endIdx = -1;
+
+      for (let i = payloadStart; i < htmlStr.length; i++) {
+        const ch = htmlStr[i];
+        if (ch === "[") {
+          depth++;
+        } else if (ch === "]") {
+          depth--;
+          if (depth === 0) {
+            endIdx = i;
+            break;
+          }
+        }
+      }
+
+      if (endIdx === -1) {
+        break;
+      }
+
+      const afterSlice = htmlStr.slice(endIdx + 1, endIdx + 8);
+      if (/^\s*—/.test(afterSlice)) {
+        openRe.lastIndex = endIdx + 1;
+        continue;
+      }
+
+      const rawPayload = htmlStr.slice(payloadStart, endIdx);
+      result += htmlStr.slice(lastPos, startIdx) + replacer(rawPayload);
+      lastPos = endIdx + 1;
+      openRe.lastIndex = lastPos;
+    }
+
+    if (lastPos === 0) return { changed: false, html: htmlStr };
+    result += htmlStr.slice(lastPos);
+    return { changed: true, html: result };
+  }
+
   function parseSmsTagPayload(payload, profile, contextText = "") {
-    const raw = String(payload || "").trim();
-    const segments = raw.includes("|")
-      ? raw.split("|").map((s) => s.trim()).filter(Boolean)
-      : raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const cleaned = cleanMultilinePayload(payload);
+    const segments = cleaned
+      .split(/\r?\n|\s*\|\s*/)
+      .map((s) => s.trim())
+      .filter(Boolean);
 
     const sceneState = detectSceneStatus(contextText);
     let contactName = profile.charName || "Собеседник";
@@ -460,20 +587,22 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
 
     let startIdx = 0;
     const first = segments[0];
+    const isSpecialFirst =
+      /^\(\s*(?:in|out|вх|исх)\s*\)/i.test(first) ||
+      /^\[?(?:печатает|typing|\.{3}|…|голосовое|гс|голос|voice|аудио|audio|стикер|sticker)\b/i.test(first);
 
-    if (!/^\(\s*(?:in|out|вх|исх)\s*\)/i.test(first)) {
-      if (!first.includes(":") || /^[^:]{1,28}$/.test(first)) {
-        contactName = cleanField(first) || contactName;
-        startIdx = 1;
-        if (
-          segments.length > 2 &&
-          !/^\(\s*(?:in|out|вх|исх)\s*\)/i.test(segments[1]) &&
-          (!segments[1].includes(":") || /в сети|онлайн|online|недоступен|выключен|печатает|typing|был|недавно|🌙|☕|🌧|✨|💌/i.test(segments[1]))
-        ) {
-          status = cleanField(segments[1]);
-          offline = /недоступен|выключен|не в сети|offline/i.test(status);
-          startIdx = 2;
-        }
+    if (segments.length >= 2 && !isSpecialFirst && !first.includes(":") && !/[?!]$/.test(first) && first.length <= 28) {
+      contactName = cleanField(first) || contactName;
+      startIdx = 1;
+      if (
+        segments.length > 2 &&
+        !/^\(\s*(?:in|out|вх|исх)\s*\)/i.test(segments[1]) &&
+        (!segments[1].includes(":") || /в сети|онлайн|online|недоступен|выключен|печатает|typing|был|недавно|🌙|☕|🌧|✨|💌/i.test(segments[1])) &&
+        !/[?!]$/.test(segments[1])
+      ) {
+        status = cleanField(segments[1]) || status;
+        offline = /недоступен|выключен|не в сети|offline/i.test(status);
+        startIdx = 2;
       }
     }
 
@@ -491,7 +620,7 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
         const dir = inOutMatch[1].toLowerCase();
         const isOut = dir === "out" || dir === "исх";
         const body = inOutMatch[2].trim();
-        if (/^(?:печатает|typing|\.{3}|…)$/i.test(body) && !isOut) {
+        if (/^\[?(?:печатает|typing|\.{3}|…)\]?$/i.test(body) && !isOut) {
           showTyping = true;
           continue;
         }
@@ -508,6 +637,10 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
         const sender = cleanField(prefixMatch[1]);
         const msgText = prefixMatch[2].trim();
         const userFlag = isUserSender(sender, profile.userName);
+        if (/^\[?(?:печатает|typing|\.{3}|…)\]?$/i.test(msgText) && !userFlag) {
+          showTyping = true;
+          continue;
+        }
         messages.push({
           sender: userFlag ? profile.userName : sender,
           isUser: userFlag,
@@ -522,7 +655,7 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       }
     }
 
-    if (messages.length === 0 && segments.length > 0) {
+    if (messages.length === 0 && !showTyping && segments.length > 0) {
       messages.push({
         sender: contactName,
         isUser: false,
@@ -533,46 +666,75 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     return { contactName, status, offline, messages, showTyping };
   }
 
-  function makeFavKey(contact = "", firstText = "") {
+  function makeLegacyFavKey(contact = "", firstText = "") {
     return `${String(contact).trim().toLowerCase()}|${String(firstText).trim().toLowerCase().slice(0, 60)}`;
   }
 
-  function isChatFavorited(contact, firstText) {
-    const s = getSettings();
-    const key = makeFavKey(contact, firstText);
-    return s.favorites.some((f) => makeFavKey(f.contactName, f.summary) === key);
+  function makeFavKeyFromData(contact = "", messages = [], summary = "") {
+    const c = String(contact).trim().toLowerCase();
+    if (Array.isArray(messages) && messages.length > 0) {
+      const joined = messages.map((m) => `${m.isUser ? "1" : "0"}:${String(m.text || "").trim()}`).join("\n");
+      return `${c}|${messages.length}|${hashText(joined)}`;
+    }
+    return makeLegacyFavKey(contact, summary);
   }
 
-  function buildPhoneHtml(data, profile) {
+  function findFavoriteIndex(favs, favKey, legacyKey) {
+    return favs.findIndex((f) => {
+      const fKey = f.favKey || makeFavKeyFromData(f.contactName, f.messages, f.summary);
+      const fLegacy = makeLegacyFavKey(f.contactName, f.summary);
+      return fKey === favKey || (legacyKey && fLegacy === legacyKey);
+    });
+  }
+
+  function makeBubbleMsgKey(contactName, isUser, idx, text) {
+    return `${String(contactName || "").trim().toLowerCase()}|${isUser ? 1 : 0}|${idx}|${hashText(String(text || "").trim())}`;
+  }
+
+  function buildPhoneHtml(data, profile, mesEl = null) {
     const s = getSettings();
     const contactName = cleanField(data.contactName || profile.charName || "Собеседник");
     const status = cleanField(data.status || "в сети • онлайн");
     const isOffline = Boolean(data.offline) || /недоступен|выключен|не в сети|offline/i.test(status);
-    const messages = Array.isArray(data.messages) && data.messages.length > 0
+    const hasMessages = Array.isArray(data.messages) && data.messages.length > 0;
+    const messages = hasMessages
       ? data.messages
-      : [{ sender: contactName, isUser: false, text: "Ты где?" }];
+      : data.showTyping
+        ? []
+        : [{ sender: contactName, isUser: false, text: "..." }];
 
-    const firstSummary = cleanField(messages[0]?.text || "");
-    const fav = isChatFavorited(contactName, firstSummary);
+    const firstSummary = cleanField(messages[0]?.text || (data.showTyping ? "печатает..." : ""));
+    const favKey = data.favKey || makeFavKeyFromData(contactName, messages, firstSummary);
+    const legacyKey = makeLegacyFavKey(contactName, firstSummary);
+    const fav = findFavoriteIndex(s.favorites, favKey, legacyKey) >= 0;
+
     const drinkIcon = THEME_DRINKS[s.theme] || "☕";
     const compactClass = s.compactMode ? "is-compact" : "";
-    const charAvatar = escapeHtml(profile.charAvatar || DEFAULT_CHAR_AVATAR);
+    const resolvedAvatar = data.charAvatar || profile.charAvatar || DEFAULT_CHAR_AVATAR;
+    const charAvatar = escapeHtml(resolvedAvatar);
 
-    const baseMinute = 18 + (hashText(contactName + firstSummary) % 38);
+    const baseTime = data.baseTime && typeof data.baseTime.hour === "number"
+      ? data.baseTime
+      : extractMesBaseTime(mesEl, contactName + "|" + firstSummary);
+    const headerTimeStr = formatTimeOffset(baseTime.hour, baseTime.minute, Math.max(0, messages.length - 1));
 
     const rowsHtml = messages
       .map((m, idx) => {
         const isUser = Boolean(m.isUser);
         const rowCls = isUser ? "is-user" : "is-char";
-        const min = (baseMinute + idx) % 60;
-        const timeStr = `22:${min < 10 ? "0" + min : min}`;
+        const timeStr = m.time || formatTimeOffset(baseTime.hour, baseTime.minute, idx);
         const avatarHtml = !isUser
           ? `<img class="st-cm-mini-avatar" src="${charAvatar}" alt="av">`
           : "";
         const checksHtml = isUser ? `<span class="st-cm-checks">${isOffline ? "✓" : "✓✓"}</span>` : "";
         const bodyHtml = renderBubbleContent(m.text);
+        const msgKey = makeBubbleMsgKey(contactName, isUser, idx, m.text);
+        const savedEmoji = s.reactions?.[msgKey] || "";
+        const reactHtml = savedEmoji
+          ? `<div class="st-cm-react" data-emoji="${escapeHtml(savedEmoji)}">${escapeHtml(savedEmoji)} 1</div>`
+          : "";
 
-        return `<div class="st-cm-row ${rowCls}">${avatarHtml}<div class="st-cm-bubble ${rowCls}" title="Нажми на сообщение, чтобы поставить реакцию">${bodyHtml}<div class="st-cm-meta"><span>${timeStr}</span>${checksHtml}</div></div></div>`;
+        return `<div class="st-cm-row ${rowCls}">${avatarHtml}<div class="st-cm-bubble ${rowCls}" data-msg-key="${escapeHtml(msgKey)}" title="Нажми на сообщение, чтобы поставить реакцию">${bodyHtml}<div class="st-cm-meta"><span>${escapeHtml(timeStr)}</span>${checksHtml}</div>${reactHtml}</div></div>`;
       })
       .join("");
 
@@ -582,17 +744,21 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
 
     const payloadJson = escapeHtml(
       JSON.stringify({
+        favKey,
         contactName,
+        charAvatar: resolvedAvatar,
         status,
         offline: isOffline,
         summary: firstSummary,
+        baseTime,
+        showTyping: Boolean(data.showTyping),
         messages
       })
     );
 
-    return `<div class="st-cm-phone ${compactClass}" data-contact="${escapeHtml(contactName)}" data-summary="${escapeHtml(firstSummary)}" data-payload="${payloadJson}">
+    return `<div class="st-cm-phone ${compactClass}" data-fav-key="${escapeHtml(favKey)}" data-contact="${escapeHtml(contactName)}" data-summary="${escapeHtml(firstSummary)}" data-payload="${payloadJson}">
       <div class="st-cm-statusbar">
-        <span>22:${baseMinute < 10 ? "0" + baseMinute : baseMinute}</span>
+        <span>${escapeHtml(headerTimeStr)}</span>
         <div class="st-cm-island"><span class="st-cm-island-lens"></span><span class="st-cm-island-led"></span></div>
         <span>5G • 100%</span>
       </div>
@@ -610,7 +776,7 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
         </div>
         <div class="st-cm-cat" style="${s.cozyMascot === false ? "display:none;" : ""}" title="Погладить котика">${CAT_SVG}</div>
         <div class="st-cm-actions">
-          <span class="st-cm-sound-btn" title="Проиграть звук уведомления СМС">🔔</span>
+          <span class="st-cm-sound-btn" title="Проверить звук уведомления СМС">🔔</span>
           <span class="st-cm-fav-btn ${fav ? "is-fav" : ""}" title="Сохранить переписку в избранное">${fav ? "♥" : "♡"}</span>
           <span class="st-cm-mini-btn" title="Свернуть / развернуть телефон">${s.compactMode ? "+" : "–"}</span>
         </div>
@@ -627,51 +793,16 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     </div>`;
   }
 
-  // Авто-генерация короткой СМС от персонажа по тексту поста (если включен авто-режим)
-  function buildAutoSmsData(rawText, profile) {
-    const clean = rawText
-      .replace(/\[(?:sms|chat|msg|vinyl):[\s\S]*?\]/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    const mood = AUTO_SMS_MOODS.find((m) => m.re.test(clean)) || AUTO_SMS_MOODS[AUTO_SMS_MOODS.length - 1];
-    const quotes = clean.match(/[«"“]([^»"”]{8,120})[»"”]/);
-    let quoteLine = "";
-    if (quotes && quotes[1]) {
-      quoteLine = quotes[1].trim();
-    } else {
-      const sentences = clean
-        .split(/(?<=[.!?…])\s+/)
-        .filter((s) => s.length >= 15 && s.length <= 120);
-      quoteLine = sentences.length > 0
-        ? sentences[sentences.length - 1]
-        : clean.slice(0, 90) + (clean.length > 90 ? "…" : "");
-    }
-
-    return {
-      contactName: profile.charName,
-      status: mood.status,
-      offline: Boolean(mood.offline),
-      messages: [
-        {
-          sender: profile.charName,
-          isUser: false,
-          text: quoteLine
-        }
-      ],
-      showTyping: false
-    };
-  }
-
-  const SMS_TAG_REGEX = /\[(?:sms|chat|смс):\s*([\s\S]+?)\](?!\s*—)/gi;
   const IN_OUT_TEST_RE = /(?:^|\s|>)\(\s*(?:in|out|вх|исх)\s*\)/i;
   const IN_OUT_LINE_RE = /^\(\s*(in|out|вх|исх)\s*\)\s*([\s\S]+)$/i;
 
   // Группировка строк (in) и (out) прямо внутри ролевого поста с сохранением РП-текста вокруг
-  function renderInOutLinesInDom(el, profile, contextText = "") {
-    if (!IN_OUT_TEST_RE.test(el.textContent || "")) return false;
+  function renderInOutLinesInDom(el, profile, contextText = "", mesEl = null) {
+    if (!IN_OUT_TEST_RE.test(el.textContent || "")) {
+      return { changed: false, hasIncoming: false };
+    }
 
-    if (el.querySelectorAll("p").length === 0) {
+    if (el.querySelectorAll("p").length === 0 && !el.querySelector(".st-cm-phone")) {
       const rawLines = (el.innerHTML || "")
         .split(/(?:<br\s*\/?>|\r?\n)+/i)
         .map((l) => l.trim())
@@ -682,14 +813,21 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     }
 
     Array.from(el.querySelectorAll("p")).forEach((p) => {
-      if (!IN_OUT_TEST_RE.test(p.textContent || "")) return;
+      const pText = p.textContent || "";
+      if (!IN_OUT_TEST_RE.test(pText)) return;
+
       const html = p.innerHTML || "";
       const hasBrOrNewline = /<br\s*\/?>|\r?\n/i.test(html);
-      const multipleMarkers = (p.textContent.match(/\(\s*(?:in|out|вх|исх)\s*\)/gi) || []).length > 1;
-      if (!hasBrOrNewline && !multipleMarkers) return;
+      const startsWithMarker = /^\s*\(\s*(?:in|out|вх|исх)\s*\)/i.test(pText);
+      const markerCount = (pText.match(/\(\s*(?:in|out|вх|исх)\s*\)/gi) || []).length;
 
-      const splitHtml = html
-        .replace(/(?!^)\s*(?=\(\s*(?:in|out|вх|исх)\s*\))/gi, "<br>")
+      if (!hasBrOrNewline && !(startsWithMarker && markerCount > 1)) return;
+
+      const preparedHtml = startsWithMarker
+        ? html.replace(/(?!^)\s+(?=\(\s*(?:in|out|вх|исх)\s*\))/gi, "<br>")
+        : html;
+
+      const splitHtml = preparedHtml
         .split(/(?:<br\s*\/?>|\r?\n)+/i)
         .map((s) => s.trim())
         .filter(Boolean);
@@ -706,6 +844,7 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
 
     const children = Array.from(el.childNodes);
     let changed = false;
+    let hasIncoming = false;
     let groupNodes = [];
     let groupMessages = [];
     let groupTyping = false;
@@ -713,11 +852,14 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     const sceneState = detectSceneStatus(contextText);
 
     const flushGroup = () => {
-      if (groupNodes.length === 0 || groupMessages.length === 0) {
+      if (groupNodes.length === 0 || (groupMessages.length === 0 && !groupTyping)) {
         groupNodes = [];
         groupMessages = [];
         groupTyping = false;
         return;
+      }
+      if (groupMessages.some((m) => !m.isUser) || groupTyping) {
+        hasIncoming = true;
       }
       const phoneHtml = buildPhoneHtml(
         {
@@ -727,7 +869,8 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
           messages: groupMessages,
           showTyping: groupTyping
         },
-        profile
+        profile,
+        mesEl
       );
       const wrapper = document.createElement("div");
       wrapper.innerHTML = phoneHtml;
@@ -770,7 +913,7 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
           const msgBody = m[2].trim();
           groupNodes.push(node);
 
-          if (/^(?:печатает|typing|\.{3}|…)$/i.test(msgBody) && !isOut) {
+          if (/^\[?(?:печатает|typing|\.{3}|…)\]?$/i.test(msgBody) && !isOut) {
             groupTyping = true;
           } else {
             groupMessages.push({
@@ -787,41 +930,48 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     }
 
     flushGroup();
-    return changed;
+    return { changed, hasIncoming };
   }
 
-  function renderSmsInElement(el, mesEl = null) {
-    if (!el) return false;
+  function renderSmsInElement(el, mesEl = null, isPreview = false) {
+    if (!el) return { rendered: false, hasIncoming: false };
     const html = el.innerHTML || "";
     const text = el.textContent || "";
     const hasTag = /\[(?:sms|chat|смс):/i.test(html) || /\[(?:sms|chat|смс):/i.test(text);
     const hasInOut = IN_OUT_TEST_RE.test(text);
 
-    if (!hasTag && !hasInOut) return false;
+    if (!hasTag && !hasInOut) {
+      return { rendered: false, hasIncoming: false };
+    }
 
-    const profile = getTavernProfile(mesEl);
+    const profile = getTavernProfile(mesEl, isPreview);
     let rendered = false;
+    let hasIncoming = false;
 
     if (hasInOut) {
-      if (renderInOutLinesInDom(el, profile, text)) {
+      const res = renderInOutLinesInDom(el, profile, text, mesEl);
+      if (res.changed) {
         rendered = true;
+        if (res.hasIncoming) hasIncoming = true;
       }
     }
 
     if (hasTag) {
       const currentHtml = el.innerHTML || "";
-      SMS_TAG_REGEX.lastIndex = 0;
-      if (SMS_TAG_REGEX.test(currentHtml)) {
-        SMS_TAG_REGEX.lastIndex = 0;
-        el.innerHTML = currentHtml.replace(SMS_TAG_REGEX, (_, payload) => {
-          const parsed = parseSmsTagPayload(cleanField(payload), profile, text);
-          return buildPhoneHtml(parsed, profile);
-        });
+      const tagRes = replaceSmsTags(currentHtml, (rawPayload) => {
+        const parsed = parseSmsTagPayload(rawPayload, profile, text);
+        if (parsed.messages.some((m) => !m.isUser) || parsed.showTyping) {
+          hasIncoming = true;
+        }
+        return buildPhoneHtml(parsed, profile, mesEl);
+      });
+      if (tagRes.changed) {
+        el.innerHTML = tagRes.html;
         rendered = true;
       }
     }
 
-    return rendered;
+    return { rendered, hasIncoming };
   }
 
   function isDomStreamingNow() {
@@ -834,14 +984,18 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
   }
 
   let isScanning = false;
+  let hasCompletedInitialScan = false;
+  const notifiedMesSignatures = new Set();
 
   function scanChat() {
     if (isScanning) return;
     isScanning = true;
 
     try {
+      // Удаление старых авто-виджетов, если они остались в DOM от прошлой версии
+      document.querySelectorAll(".st-cm-auto-mount").forEach((n) => n.remove());
+
       const streaming = isDomStreamingNow();
-      const settings = getSettings();
       const allMessages = Array.from(document.querySelectorAll("#chat .mes"));
 
       allMessages.forEach((mes, idx) => {
@@ -849,52 +1003,49 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
         if (!mesText) return;
 
         const isLastMessage = idx === allMessages.length - 1;
-
-        if (renderSmsInElement(mesText, mes) || mesText.querySelector(".st-cm-phone")) {
-          const autoMount = mes.querySelector(".st-cm-auto-mount");
-          if (autoMount) autoMount.remove();
-          return;
-        }
-
-        const rawText = (mesText.innerText || "").trim();
-        if (/\[(?:sms|chat|смс):[^\]]*$/i.test(rawText)) {
-          const autoMount = mes.querySelector(".st-cm-auto-mount");
-          if (autoMount) autoMount.remove();
-          return;
-        }
-
         if (streaming && isLastMessage) {
-          const autoMount = mes.querySelector(".st-cm-auto-mount");
-          if (autoMount) autoMount.remove();
           return;
         }
 
+        const htmlLen = (mesText.innerHTML || "").length;
+        const textSample = mesText.textContent || "";
+        const scanSig = `${htmlLen}:${hashText(textSample)}`;
+        if (mesText.dataset.cmScanned === scanSig) {
+          return;
+        }
+
+        const mesId = mes.getAttribute("mesid") || String(idx);
+        const swipeId = mes.getAttribute("swipeid") || "0";
+        const mesSig = `${mesId}:${swipeId}`;
         const isUser = mes.getAttribute("is_user") === "true";
         const isSystem = mes.getAttribute("is_system") === "true";
-        if (isUser || isSystem) return;
 
-        let mount = mes.querySelector(".st-cm-auto-mount");
-        if (settings.autoWidget === false) {
-          if (mount) mount.remove();
-          return;
+        const { rendered, hasIncoming } = renderSmsInElement(mesText, mes, false);
+        const finalHtmlLen = (mesText.innerHTML || "").length;
+        const finalText = mesText.textContent || "";
+        mesText.dataset.cmScanned = `${finalHtmlLen}:${hashText(finalText)}`;
+
+        if (rendered || mesText.querySelector(".st-cm-phone")) {
+          if (
+            hasCompletedInitialScan &&
+            rendered &&
+            hasIncoming &&
+            isLastMessage &&
+            !isUser &&
+            !isSystem &&
+            !notifiedMesSignatures.has(mesSig)
+          ) {
+            notifiedMesSignatures.add(mesSig);
+            playSmsSound("incoming");
+          } else {
+            notifiedMesSignatures.add(mesSig);
+          }
         }
-
-        if (rawText.length < 18) return;
-
-        const swipeId = mes.getAttribute("swipeid") || "";
-        const stateKey = `${rawText.length}:${hashText(rawText)}:${swipeId}`;
-        if (mount && mount.dataset.stateKey === stateKey) return;
-
-        const profile = getTavernProfile(mes);
-        const autoData = buildAutoSmsData(rawText, profile);
-        if (!mount) {
-          mount = document.createElement("div");
-          mount.className = "st-cm-auto-mount";
-          mesText.insertAdjacentElement("afterend", mount);
-        }
-        mount.dataset.stateKey = stateKey;
-        mount.innerHTML = buildPhoneHtml(autoData, profile);
       });
+
+      if (!streaming) {
+        hasCompletedInitialScan = true;
+      }
     } finally {
       isScanning = false;
     }
@@ -917,9 +1068,9 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       return;
     }
 
-    const profile = getTavernProfile(null);
+    const fallbackProfile = getTavernProfile(null, true);
     listEl.innerHTML = favs
-      .map((f) => buildPhoneHtml(f, profile))
+      .map((f) => buildPhoneHtml(f, fallbackProfile, null))
       .join("");
   }
 
@@ -932,14 +1083,16 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
 
     const contactName = payload?.contactName || phoneEl.dataset.contact || "Собеседник";
     const summary = payload?.summary || phoneEl.dataset.summary || "";
-    const key = makeFavKey(contactName, summary);
-    const idx = s.favorites.findIndex((f) => makeFavKey(f.contactName, f.summary) === key);
+    const favKey = payload?.favKey || phoneEl.dataset.favKey || makeFavKeyFromData(contactName, payload?.messages, summary);
+    const legacyKey = makeLegacyFavKey(contactName, summary);
+    const idx = findFavoriteIndex(s.favorites, favKey, legacyKey);
 
     if (idx >= 0) {
       s.favorites.splice(idx, 1);
     } else {
       s.favorites.unshift(
         payload || {
+          favKey,
           contactName,
           status: "в сети • сохранено",
           summary,
@@ -953,7 +1106,9 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
 
     const isFavNow = idx < 0;
     document.querySelectorAll(".st-cm-phone").forEach((p) => {
-      if (makeFavKey(p.dataset.contact, p.dataset.summary) === key) {
+      const pFavKey = p.dataset.favKey || "";
+      const pLegacy = makeLegacyFavKey(p.dataset.contact, p.dataset.summary);
+      if (pFavKey === favKey || (legacyKey && pLegacy === legacyKey)) {
         const btn = p.querySelector(".st-cm-fav-btn");
         if (btn) {
           btn.classList.toggle("is-fav", isFavNow);
@@ -972,16 +1127,27 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     const text = input.value.trim();
     if (!text) return;
 
-    const contactName = phoneEl.dataset.contact || "Собеседник";
+    const inChat = Boolean(phoneEl.closest("#chat"));
+    if (inChat && isDomStreamingNow()) {
+      if (window.toastr?.info) {
+        window.toastr.info("Дождитесь завершения ответа персонажа перед отправкой СМС");
+      }
+      return;
+    }
+
+    const isOffline = Boolean(phoneEl.querySelector(".st-cm-online-ring.is-offline"));
     const body = phoneEl.querySelector(".st-cm-body");
 
     if (body) {
       const now = new Date();
       const hh = String(now.getHours()).padStart(2, "0");
       const mm = String(now.getMinutes()).padStart(2, "0");
+      const contactName = phoneEl.dataset.contact || "Собеседник";
+      const existingCount = body.querySelectorAll(".st-cm-row").length;
+      const msgKey = makeBubbleMsgKey(contactName, true, existingCount, text);
       const row = document.createElement("div");
       row.className = "st-cm-row is-user";
-      row.innerHTML = `<div class="st-cm-bubble is-user" title="Нажми на сообщение, чтобы поставить реакцию">${renderBubbleContent(text)}<div class="st-cm-meta"><span>${hh}:${mm}</span><span class="st-cm-checks">✓✓</span></div></div>`;
+      row.innerHTML = `<div class="st-cm-bubble is-user" data-msg-key="${escapeHtml(msgKey)}" title="Нажми на сообщение, чтобы поставить реакцию">${renderBubbleContent(text)}<div class="st-cm-meta"><span>${hh}:${mm}</span><span class="st-cm-checks">${isOffline ? "✓" : "✓✓"}</span></div></div>`;
       body.appendChild(row);
       body.scrollTop = body.scrollHeight;
     }
@@ -990,18 +1156,35 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     input.value = "";
 
     // Если это телефон внутри чата ST — отправляем (out) СМС в поле ввода SillyTavern
-    if (phoneEl.closest("#chat")) {
+    if (inChat) {
       const stTextarea = document.getElementById("send_textarea");
       const stSendBtn = document.getElementById("send_but");
       if (stTextarea && stSendBtn) {
         const formatted = `(out) ${text}`;
-        stTextarea.value = stTextarea.value
+        stTextarea.value = stTextarea.value.trim()
           ? `${stTextarea.value.trim()}\n${formatted}`
           : formatted;
         stTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+        stTextarea.dispatchEvent(new Event("change", { bubbles: true }));
         stSendBtn.click();
       }
     }
+  }
+
+  function saveBubbleReaction(msgKey, emoji) {
+    if (!msgKey) return;
+    const s = getSettings();
+    if (!emoji) {
+      delete s.reactions[msgKey];
+    } else {
+      s.reactions[msgKey] = emoji;
+      const keys = Object.keys(s.reactions);
+      if (keys.length > 500) {
+        delete s.reactions[keys[0]];
+      }
+    }
+    const ctx = window.SillyTavern?.getContext?.();
+    ctx?.saveSettingsDebounced?.();
   }
 
   // ============================================================================
@@ -1028,13 +1211,11 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       return;
     }
 
-    // 2. Звук уведомления (🔔)
+    // 2. Проверить звук уведомления (🔔) без перезаписи настройки звука
     const soundBtn = e.target.closest(".st-cm-sound-btn");
     if (soundBtn) {
       e.stopPropagation();
-      const s = getSettings();
-      if (!s.sound) s.sound = true;
-      playSmsSound("incoming");
+      playSmsSound("incoming", true);
       return;
     }
 
@@ -1077,16 +1258,18 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       return;
     }
 
-    // 8. Клик по пузырьку сообщения — ставит/меняет реакцию (❤️ 🔥 🐾 🥺 ✨ 😂)
+    // 7. Клик по пузырьку сообщения — ставит/меняет реакцию и сохраняет её
     const bubble = e.target.closest(".st-cm-bubble");
     if (bubble) {
       e.stopPropagation();
       let reactEl = bubble.querySelector(".st-cm-react");
       const currentEmoji = reactEl?.dataset?.emoji || "";
       const nextIdx = currentEmoji ? REACTIONS.indexOf(currentEmoji) + 1 : 0;
+      const msgKey = bubble.dataset.msgKey || "";
 
       if (nextIdx >= REACTIONS.length) {
         if (reactEl) reactEl.remove();
+        saveBubbleReaction(msgKey, "");
       } else {
         const nextEmoji = REACTIONS[nextIdx];
         if (!reactEl) {
@@ -1096,13 +1279,14 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
         }
         reactEl.dataset.emoji = nextEmoji;
         reactEl.textContent = `${nextEmoji} 1`;
+        saveBubbleReaction(msgKey, nextEmoji);
         playSmsSound("react");
       }
     }
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && e.target.classList?.contains("st-cm-input")) {
+    if (e.key === "Enter" && !e.isComposing && e.target.classList?.contains("st-cm-input")) {
       e.preventDefault();
       const phone = e.target.closest(".st-cm-phone");
       if (phone) handleQuickReply(phone);
@@ -1112,11 +1296,26 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
   // ============================================================================
   // ПАНЕЛЬ НАСТРОЕК В МЕНЮ EXTENSIONS
   // ============================================================================
+  const PREVIEW_TEMPLATE_HTML = `
+    <p>(in) живот болит, зараза 😭</p>
+    <p>(out) уже еду с таблетками</p>
+    <p>(in) голосовое: 0:03</p>
+    <p>(out) голосовое: 0:06</p>
+  `;
+
+  function refreshSettingsPreview() {
+    const previewEl = document.getElementById("st_cm_preview");
+    if (!previewEl) return;
+    previewEl.innerHTML = PREVIEW_TEMPLATE_HTML;
+    renderSmsInElement(previewEl, null, true);
+  }
+
   function mountSettingsUi() {
     const container = document.getElementById("extensions_settings2") || document.getElementById("extensions_settings");
     if (!container || document.getElementById("st-cm-settings")) return;
 
     const s = getSettings();
+    const vol = typeof s.volume === "number" ? s.volume : 0.4;
 
     const html = `
       <div id="st-cm-settings" class="inline-drawer">
@@ -1125,16 +1324,14 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
           <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-          <label class="checkbox_label"><input type="checkbox" id="st_cm_autowidget" ${s.autoWidget !== false ? "checked" : ""}><span>Авто-СМС под каждым ответом бота</span></label>
           <label class="checkbox_label"><input type="checkbox" id="st_cm_sound" ${s.sound !== false ? "checked" : ""}><span>Звуки СМС, голосовых и мурчания котика</span></label>
           <label class="checkbox_label"><input type="checkbox" id="st_cm_mascot" ${s.cozyMascot !== false ? "checked" : ""}><span>🐾 Котик-маскот в шапке телефона</span></label>
           <label class="checkbox_label"><input type="checkbox" id="st_cm_footer" ${s.showFooter !== false ? "checked" : ""}><span>Строка быстрого ответа внизу экрана</span></label>
           <label class="checkbox_label"><input type="checkbox" id="st_cm_compact" ${s.compactMode ? "checked" : ""}><span>Компактный режим (мини-шапка)</span></label>
-          <label class="checkbox_label"><input type="checkbox" id="st_cm_enabled" ${s.enabled ? "checked" : ""}><span>Авто-промпт для бота (тег [sms: ...])</span></label>
 
           <div style="margin-top:8px;">
-            <label for="st_cm_volume">Громкость звуков: <span id="st_cm_vol_label">${Math.round((typeof s.volume === "number" ? s.volume : 0.4) * 100)}%</span></label>
-            <input type="range" id="st_cm_volume" min="0.05" max="1" step="0.05" value="${typeof s.volume === "number" ? s.volume : 0.4}" style="width:100%;">
+            <label for="st_cm_volume">Громкость звуков: <span id="st_cm_vol_label">${Math.round(vol * 100)}%</span></label>
+            <input type="range" id="st_cm_volume" min="0.05" max="1" step="0.05" value="${vol}" style="width:100%;">
           </div>
 
           <div style="margin-top:8px;">
@@ -1150,12 +1347,7 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
             </select>
           </div>
 
-          <div id="st_cm_preview" style="margin-top:10px;">
-            <p>(in) живот болит, зараза 😭</p>
-            <p>(out) уже еду с таблетками</p>
-            <p>(in) голосовое: 0:03</p>
-            <p>(out) голосовое: 0:06</p>
-          </div>
+          <div id="st_cm_preview" style="margin-top:10px;">${PREVIEW_TEMPLATE_HTML}</div>
 
           <div class="st-cm-shelf-box">
             <div class="st-cm-shelf-header">
@@ -1167,21 +1359,16 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       </div>`;
 
     container.insertAdjacentHTML("beforeend", html);
-    renderSmsInElement(document.getElementById("st_cm_preview"), null);
+    refreshSettingsPreview();
     renderFavoritesShelf();
 
     const save = () => {
       const ctx = window.SillyTavern?.getContext?.();
       ctx?.saveSettingsDebounced?.();
       applyTheme();
-      updatePrompt();
+      clearLegacyPrompt();
     };
 
-    document.getElementById("st_cm_autowidget")?.addEventListener("change", (e) => {
-      s.autoWidget = e.target.checked;
-      save();
-      scanChat();
-    });
     document.getElementById("st_cm_sound")?.addEventListener("change", (e) => {
       s.sound = e.target.checked;
       save();
@@ -1203,10 +1390,6 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       });
       save();
     });
-    document.getElementById("st_cm_enabled")?.addEventListener("change", (e) => {
-      s.enabled = e.target.checked;
-      save();
-    });
     document.getElementById("st_cm_volume")?.addEventListener("input", (e) => {
       const val = parseFloat(e.target.value);
       s.volume = isNaN(val) ? 0.4 : val;
@@ -1221,6 +1404,35 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
   }
 
   let hooksRegistered = false;
+  let mutationTimer = null;
+  let chatObserver = null;
+
+  function scheduleScan(delay = 120) {
+    if (mutationTimer) clearTimeout(mutationTimer);
+    mutationTimer = setTimeout(scanChat, delay);
+  }
+
+  function observeChatContainer() {
+    const chat = document.getElementById("chat");
+    if (!chat || chat.dataset.cmObserved === "1") return;
+    chat.dataset.cmObserved = "1";
+
+    if (chatObserver) {
+      try { chatObserver.disconnect(); } catch (e) {}
+    }
+
+    chatObserver = new MutationObserver((mutations) => {
+      const externalChange = mutations.some((m) => {
+        const targetEl = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+        return targetEl && !targetEl.closest(".st-cm-phone");
+      });
+      if (!externalChange) return;
+      scheduleScan(180);
+    });
+
+    chatObserver.observe(chat, { childList: true, subtree: true, characterData: true });
+  }
+
   function registerTavernEvents() {
     if (hooksRegistered) return;
     const ctx = window.SillyTavern?.getContext?.();
@@ -1229,11 +1441,22 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
     if (!es || !et) return;
 
     hooksRegistered = true;
+
     const triggerScan = () => {
-      setTimeout(scanChat, 80);
-      setTimeout(scanChat, 450);
-      setTimeout(scanChat, 1200);
+      scheduleScan(60);
+      setTimeout(scanChat, 380);
     };
+
+    if (et.CHAT_CHANGED) {
+      es.on(et.CHAT_CHANGED, () => {
+        hasCompletedInitialScan = false;
+        notifiedMesSignatures.clear();
+        clearLegacyPrompt();
+        observeChatContainer();
+        refreshSettingsPreview();
+        triggerScan();
+      });
+    }
 
     [
       "GENERATION_ENDED",
@@ -1245,43 +1468,27 @@ Use (in) and (out) ONLY for phone messages, while keeping normal narrative and s
       "MESSAGE_EDITED",
       "MESSAGE_SWIPED",
       "IMPERSONATE_READY",
-      "CHAT_CHANGED",
       "MORE_MESSAGES_LOADED"
     ].forEach((name) => {
       if (et[name]) es.on(et[name], triggerScan);
     });
   }
 
-  let mutationTimer = null;
-
   function initMessengerExtension() {
+    clearLegacyPrompt();
     applyTheme();
-    updatePrompt();
     mountSettingsUi();
     registerTavernEvents();
+    observeChatContainer();
     scanChat();
-
-    const chat = document.getElementById("chat");
-    if (chat && !chat.dataset.cmObserved) {
-      chat.dataset.cmObserved = "1";
-      new MutationObserver((mutations) => {
-        const externalChange = mutations.some((m) => {
-          const targetEl = m.target.nodeType === 1 ? m.target : m.target.parentElement;
-          return targetEl && !targetEl.closest(".st-cm-phone, .st-cm-auto-mount");
-        });
-        if (!externalChange) return;
-        if (mutationTimer) clearTimeout(mutationTimer);
-        mutationTimer = setTimeout(scanChat, 220);
-      }).observe(chat, { childList: true, subtree: true, characterData: true });
-    }
   }
 
   if (window.jQuery) {
     window.jQuery(() => initMessengerExtension());
+  } else if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initMessengerExtension, { once: true });
   } else {
     initMessengerExtension();
   }
-  setTimeout(initMessengerExtension, 800);
-  setTimeout(initMessengerExtension, 2500);
-  setInterval(scanChat, 1500);
+  setTimeout(initMessengerExtension, 900);
 })();
