@@ -867,23 +867,167 @@ CORRECT (required when texting on phone):
     return s;
   }
 
-  // Группировка строк (in) и (out) прямо внутри ролевого поста с сохранением РП-текста вокруг
+  // Защита чужих DOM-узлов: TavernHelper (iframe / pre / code / .TH-render), Cozy Vinyl, <details> reasoning, кастомные карточки
+  const PROTECTED_SELECTOR = [
+    ".st-cm-phone",
+    ".st-cm-tag-slot",
+    "pre",
+    "code",
+    "iframe",
+    "script",
+    "style",
+    "details",
+    "table",
+    "svg",
+    "canvas",
+    "audio",
+    "video",
+    "textarea",
+    "button",
+    "input",
+    "select",
+    ".mes_reasoning",
+    ".TH-render",
+    "[id^='message-iframe-']"
+  ].join(", ");
+
+  const widgetRestoreMap = new WeakMap();
+
+  function isProtectedNode(node) {
+    if (!node || node.nodeType !== 1) return false;
+    if (node.matches?.(PROTECTED_SELECTOR)) return true;
+    if (node.closest?.(PROTECTED_SELECTOR)) return true;
+    if (node.querySelector?.(PROTECTED_SELECTOR)) return true;
+    if (node.querySelector?.("div, section, article, form")) return true;
+    return false;
+  }
+
+  function wrapPureBrLinesIfNeeded(el) {
+    if (!el) return;
+    const elemChildren = Array.from(el.children);
+    // Оборачиваем строки в <p> ТОЛЬКО если внутри вообще нет блочной разметки/виджетов/кода (только текст и <br>)
+    const isPureTextAndBr = elemChildren.every((ch) => ch.tagName === "BR");
+    if (!isPureTextAndBr) return;
+
+    const rawLines = (el.innerHTML || "")
+      .split(/(?:<br\s*\/?>|\r?\n)+/i)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (rawLines.length > 0) {
+      el.innerHTML = rawLines.map((l) => `<p>${l}</p>`).join("");
+    }
+  }
+
+  function hasUnclosedSmsTag(htmlStr = "") {
+    const openRe = /\[(?:sms|chat|смс):\s*/gi;
+    let match;
+    while ((match = openRe.exec(htmlStr)) !== null) {
+      let depth = 1;
+      for (let i = match.index + match[0].length; i < htmlStr.length; i++) {
+        if (htmlStr[i] === "[") depth++;
+        else if (htmlStr[i] === "]") {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      if (depth > 0) return true;
+    }
+    return false;
+  }
+
+  // Локальный рендер тегов [sms: ...] без перезаписи mesText.innerHTML (не трогает iframe TavernHelper и соседние виджеты)
+  function renderSmsTagsInDom(el, profile, contextText = "", mesEl = null) {
+    let changed = false;
+    let hasIncoming = false;
+
+    // 1. Многострочный [sms: ...], разбитый парсером Markdown на несколько соседних <p>
+    const topChildren = Array.from(el.children);
+    for (let i = 0; i < topChildren.length; i++) {
+      const firstP = topChildren[i];
+      if (!firstP.isConnected || firstP.tagName !== "P" || isProtectedNode(firstP)) continue;
+      if (!/\[(?:sms|chat|смс):/i.test(firstP.innerHTML || "")) continue;
+      if (!hasUnclosedSmsTag(firstP.innerHTML || "")) continue;
+
+      const collected = [firstP];
+      let combinedHtml = firstP.innerHTML || "";
+      let closed = false;
+
+      for (let j = i + 1; j < topChildren.length; j++) {
+        const nextNode = topChildren[j];
+        if (!nextNode.isConnected || nextNode.tagName !== "P" || isProtectedNode(nextNode)) break;
+        collected.push(nextNode);
+        combinedHtml += "\n" + (nextNode.innerHTML || "");
+        if (!hasUnclosedSmsTag(combinedHtml)) {
+          closed = true;
+          i = j;
+          break;
+        }
+      }
+
+      if (closed && collected.length > 1) {
+        const tagRes = replaceSmsTags(combinedHtml, (rawPayload) => {
+          const parsed = parseSmsTagPayload(rawPayload, profile, contextText);
+          if (parsed.messages.some((m) => !m.isUser) || parsed.showTyping) {
+            hasIncoming = true;
+          }
+          return buildPhoneHtml(parsed, profile, mesEl);
+        });
+        if (tagRes.changed) {
+          const savedClones = collected.map((n) => n.cloneNode(true));
+          const slot = document.createElement("div");
+          slot.className = "st-cm-tag-slot";
+          slot.style.display = "contents";
+          slot.innerHTML = tagRes.html;
+          widgetRestoreMap.set(slot, savedClones);
+          collected[0].replaceWith(slot);
+          for (let k = 1; k < collected.length; k++) {
+            collected[k].remove();
+          }
+          changed = true;
+        }
+      }
+    }
+
+    // 2. Обычный [sms: ...] внутри одного текстового блока (<p>, <blockquote>, <li>)
+    Array.from(el.querySelectorAll("p, blockquote, li")).forEach((node) => {
+      if (!node.isConnected || isProtectedNode(node)) return;
+      if (node.querySelector("p, blockquote, li")) return;
+      const nodeHtml = node.innerHTML || "";
+      if (!/\[(?:sms|chat|смс):/i.test(nodeHtml)) return;
+
+      const tagRes = replaceSmsTags(nodeHtml, (rawPayload) => {
+        const parsed = parseSmsTagPayload(rawPayload, profile, contextText);
+        if (parsed.messages.some((m) => !m.isUser) || parsed.showTyping) {
+          hasIncoming = true;
+        }
+        return buildPhoneHtml(parsed, profile, mesEl);
+      });
+
+      if (tagRes.changed) {
+        const savedClones = [node.cloneNode(true)];
+        const slot = document.createElement("div");
+        slot.className = "st-cm-tag-slot";
+        slot.style.display = "contents";
+        slot.innerHTML = tagRes.html;
+        widgetRestoreMap.set(slot, savedClones);
+        node.replaceWith(slot);
+        changed = true;
+      }
+    });
+
+    return { changed, hasIncoming };
+  }
+
+  // Группировка строк (in) и (out) локально на уровне узлов <p>/<blockquote> без затрагивания соседей
   function renderInOutLinesInDom(el, profile, contextText = "", mesEl = null) {
     if (!IN_OUT_TEST_RE.test(el.textContent || "")) {
       return { changed: false, hasIncoming: false };
     }
 
-    if (el.querySelectorAll("p").length === 0 && !el.querySelector(".st-cm-phone")) {
-      const rawLines = (el.innerHTML || "")
-        .split(/(?:<br\s*\/?>|\r?\n)+/i)
-        .map((l) => l.trim())
-        .filter(Boolean);
-      if (rawLines.length > 0) {
-        el.innerHTML = rawLines.map((l) => `<p>${l}</p>`).join("");
-      }
-    }
+    wrapPureBrLinesIfNeeded(el);
 
     Array.from(el.querySelectorAll("p")).forEach((p) => {
+      if (!p.isConnected || isProtectedNode(p)) return;
       const pText = p.textContent || "";
       if (!IN_OUT_TEST_RE.test(pText)) return;
 
@@ -947,6 +1091,8 @@ CORRECT (required when texting on phone):
       wrapper.innerHTML = phoneHtml;
       const phoneNode = wrapper.firstElementChild;
       if (phoneNode) {
+        const savedClones = groupNodes.map((n) => n.cloneNode(true));
+        widgetRestoreMap.set(phoneNode, savedClones);
         groupNodes[0].replaceWith(phoneNode);
         for (let k = 1; k < groupNodes.length; k++) {
           groupNodes[k].remove();
@@ -968,7 +1114,11 @@ CORRECT (required when texting on phone):
         continue;
       }
 
-      if (node.nodeType === 1 && (node.tagName === "P" || node.tagName === "BLOCKQUOTE")) {
+      if (
+        node.nodeType === 1 &&
+        (node.tagName === "P" || node.tagName === "BLOCKQUOTE") &&
+        !isProtectedNode(node)
+      ) {
         const txt = (node.textContent || "").trim();
         if (!txt) {
           if (groupNodes.length > 0) {
@@ -1015,6 +1165,10 @@ CORRECT (required when texting on phone):
       return { rendered: false, hasIncoming: false };
     }
 
+    if (hasTag) {
+      wrapPureBrLinesIfNeeded(el);
+    }
+
     const profile = getTavernProfile(mesEl, isPreview);
     let rendered = false;
     let hasIncoming = false;
@@ -1028,17 +1182,10 @@ CORRECT (required when texting on phone):
     }
 
     if (hasTag) {
-      const currentHtml = el.innerHTML || "";
-      const tagRes = replaceSmsTags(currentHtml, (rawPayload) => {
-        const parsed = parseSmsTagPayload(rawPayload, profile, text);
-        if (parsed.messages.some((m) => !m.isUser) || parsed.showTyping) {
-          hasIncoming = true;
-        }
-        return buildPhoneHtml(parsed, profile, mesEl);
-      });
+      const tagRes = renderSmsTagsInDom(el, profile, text, mesEl);
       if (tagRes.changed) {
-        el.innerHTML = tagRes.html;
         rendered = true;
+        if (tagRes.hasIncoming) hasIncoming = true;
       }
     }
 
@@ -1057,19 +1204,30 @@ CORRECT (required when texting on phone):
   let isScanning = false;
   let hasCompletedInitialScan = false;
   const notifiedMesSignatures = new Set();
-  const originalMesHtmlMap = new WeakMap();
 
+  // Точечный откат ТОЛЬКО собственных узлов .st-cm-tag-slot / .st-cm-phone (без перезаписи mesText.innerHTML и перезагрузки iframe TavernHelper)
   function restoreChatWidgets() {
     document.querySelectorAll(".st-cm-auto-mount").forEach((n) => n.remove());
     document.querySelectorAll("#chat .mes .mes_text").forEach((mesText) => {
       delete mesText.dataset.cmScanned;
-      if (!mesText.querySelector(".st-cm-phone")) return;
-      const savedHtml = originalMesHtmlMap.get(mesText);
-      if (typeof savedHtml === "string") {
-        mesText.innerHTML = savedHtml;
-        return;
-      }
+
+      mesText.querySelectorAll(".st-cm-tag-slot").forEach((slot) => {
+        const saved = widgetRestoreMap.get(slot);
+        if (Array.isArray(saved) && saved.length > 0) {
+          const frag = document.createDocumentFragment();
+          saved.forEach((n) => frag.appendChild(n.cloneNode(true)));
+          slot.replaceWith(frag);
+        }
+      });
+
       mesText.querySelectorAll(".st-cm-phone").forEach((phoneEl) => {
+        const saved = widgetRestoreMap.get(phoneEl);
+        if (Array.isArray(saved) && saved.length > 0) {
+          const frag = document.createDocumentFragment();
+          saved.forEach((n) => frag.appendChild(n.cloneNode(true)));
+          phoneEl.replaceWith(frag);
+          return;
+        }
         let payload = null;
         try {
           payload = JSON.parse(phoneEl.dataset.payload || "null");
@@ -1129,9 +1287,6 @@ CORRECT (required when texting on phone):
         const isUser = mes.getAttribute("is_user") === "true";
         const isSystem = mes.getAttribute("is_system") === "true";
 
-        if (!mesText.querySelector(".st-cm-phone")) {
-          originalMesHtmlMap.set(mesText, mesText.innerHTML);
-        }
         const { rendered, hasIncoming } = renderSmsInElement(mesText, mes, false);
         const finalHtmlLen = (mesText.innerHTML || "").length;
         const finalText = mesText.textContent || "";
@@ -1590,7 +1745,10 @@ CORRECT (required when texting on phone):
       if (getSettings().extensionEnabled === false) return;
       const externalChange = mutations.some((m) => {
         const targetEl = m.target.nodeType === 1 ? m.target : m.target.parentElement;
-        return targetEl && !targetEl.closest(".st-cm-phone");
+        return (
+          targetEl &&
+          !targetEl.closest(".st-cm-phone, .st-cm-tag-slot, iframe, pre, code, .TH-render, [id^='message-iframe-']")
+        );
       });
       if (!externalChange) return;
       scheduleScan(180);
