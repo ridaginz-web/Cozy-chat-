@@ -27,6 +27,7 @@ CORRECT (required when texting on phone):
 Нажимаю «отправить».`;
 
   const defaultSettings = {
+    extensionEnabled: true,
     autoPrompt: true,
     sound: true,
     volume: 0.4,
@@ -126,7 +127,7 @@ CORRECT (required when texting on phone):
     const ctx = window.SillyTavern?.getContext?.();
     if (typeof ctx?.setExtensionPrompt !== "function") return;
     const s = getSettings();
-    const active = s.autoPrompt !== false;
+    const active = s.extensionEnabled !== false && s.autoPrompt !== false;
     const charLabel = !isSystemName(ctx?.name2) ? ctx.name2.trim() : "{{char}}";
     const userLabel = !isSystemName(ctx?.name1) ? ctx.name1.trim() : "{{user}}";
     const promptValue = active
@@ -304,6 +305,7 @@ CORRECT (required when texting on phone):
   function applyTheme() {
     const s = getSettings();
     document.body.classList.remove(...THEME_CLASSES);
+    if (s.extensionEnabled === false) return;
     if (s.theme && s.theme !== "glass") {
       document.body.classList.add(`st-cm-theme-${s.theme}`);
     }
@@ -364,6 +366,7 @@ CORRECT (required when texting on phone):
   // 🔔 Звук уведомления СМС / смены реакции / голосового
   function playSmsSound(type = "incoming", forcePreview = false) {
     const s = getSettings();
+    if (s.extensionEnabled === false) return;
     if (!forcePreview && !s.sound) return;
     const ctx = unlockAudioEngine();
     if (!ctx) return;
@@ -436,7 +439,7 @@ CORRECT (required when texting on phone):
   // 🐾 Мурчание котика в шапке мессенджера
   function playCatPurr() {
     const s = getSettings();
-    if (!s.sound) return;
+    if (s.extensionEnabled === false || !s.sound) return;
     const ctx = unlockAudioEngine();
     if (!ctx) return;
 
@@ -677,7 +680,7 @@ CORRECT (required when texting on phone):
       if (inOutMatch) {
         const dir = inOutMatch[1].toLowerCase();
         const isOut = dir === "out" || dir === "исх";
-        const body = inOutMatch[2].trim();
+        const body = stripSmsSpeechWrappers(inOutMatch[2]);
         if (/^\[?(?:печатает|typing|\.{3}|…)\]?$/i.test(body) && !isOut) {
           showTyping = true;
           continue;
@@ -851,8 +854,18 @@ CORRECT (required when texting on phone):
     </div>`;
   }
 
-  const IN_OUT_TEST_RE = /(?:^|\s|>|\*|_)\(\s*(?:in|out|вх|исх)\s*\)/i;
+  const IN_OUT_TEST_RE = /(?:^|\s|>|[«"“*'_—–-])\(\s*(?:in|out|вх|исх)\s*\)/i;
   const IN_OUT_LINE_RE = /^(?:>\s*)?[\*_]*\(\s*(in|out|вх|исх)\s*\)[\*_]*\s*([\s\S]+)$/i;
+
+  // Страховка на случай, если модель всё же обернула текст после (in)/(out) в кавычки или тире прямой речи
+  function stripSmsSpeechWrappers(raw = "") {
+    let s = String(raw || "").trim();
+    s = s.replace(/^[—–-]\s+/, "").trim();
+    if (/^«[^«»]+»$/.test(s) || /^"[^"]+"$/.test(s) || /^“[^“”]+”$/.test(s)) {
+      s = s.slice(1, -1).trim();
+    }
+    return s;
+  }
 
   // Группировка строк (in) и (out) прямо внутри ролевого поста с сохранением РП-текста вокруг
   function renderInOutLinesInDom(el, profile, contextText = "", mesEl = null) {
@@ -955,7 +968,7 @@ CORRECT (required when texting on phone):
         continue;
       }
 
-      if (node.nodeType === 1 && node.tagName === "P") {
+      if (node.nodeType === 1 && (node.tagName === "P" || node.tagName === "BLOCKQUOTE")) {
         const txt = (node.textContent || "").trim();
         if (!txt) {
           if (groupNodes.length > 0) {
@@ -968,7 +981,7 @@ CORRECT (required when texting on phone):
         if (m) {
           const dir = m[1].toLowerCase();
           const isOut = dir === "out" || dir === "исх";
-          const msgBody = m[2].trim();
+          const msgBody = stripSmsSpeechWrappers(m[2]);
           groupNodes.push(node);
 
           if (/^\[?(?:печатает|typing|\.{3}|…)\]?$/i.test(msgBody) && !isOut) {
@@ -1044,12 +1057,50 @@ CORRECT (required when texting on phone):
   let isScanning = false;
   let hasCompletedInitialScan = false;
   const notifiedMesSignatures = new Set();
+  const originalMesHtmlMap = new WeakMap();
+
+  function restoreChatWidgets() {
+    document.querySelectorAll(".st-cm-auto-mount").forEach((n) => n.remove());
+    document.querySelectorAll("#chat .mes .mes_text").forEach((mesText) => {
+      delete mesText.dataset.cmScanned;
+      if (!mesText.querySelector(".st-cm-phone")) return;
+      const savedHtml = originalMesHtmlMap.get(mesText);
+      if (typeof savedHtml === "string") {
+        mesText.innerHTML = savedHtml;
+        return;
+      }
+      mesText.querySelectorAll(".st-cm-phone").forEach((phoneEl) => {
+        let payload = null;
+        try {
+          payload = JSON.parse(phoneEl.dataset.payload || "null");
+        } catch (e) {}
+        const frag = document.createDocumentFragment();
+        const msgs = Array.isArray(payload?.messages) ? payload.messages : [];
+        msgs.forEach((m) => {
+          const p = document.createElement("p");
+          p.textContent = `(${m.isUser ? "out" : "in"}) ${m.text || ""}`;
+          frag.appendChild(p);
+        });
+        if (payload?.showTyping) {
+          const p = document.createElement("p");
+          p.textContent = "(in) печатает";
+          frag.appendChild(p);
+        }
+        phoneEl.replaceWith(frag);
+      });
+    });
+  }
 
   function scanChat() {
     if (isScanning) return;
     isScanning = true;
 
     try {
+      if (getSettings().extensionEnabled === false) {
+        restoreChatWidgets();
+        return;
+      }
+
       // Удаление старых авто-виджетов, если они остались в DOM от прошлой версии
       document.querySelectorAll(".st-cm-auto-mount").forEach((n) => n.remove());
 
@@ -1078,6 +1129,9 @@ CORRECT (required when texting on phone):
         const isUser = mes.getAttribute("is_user") === "true";
         const isSystem = mes.getAttribute("is_system") === "true";
 
+        if (!mesText.querySelector(".st-cm-phone")) {
+          originalMesHtmlMap.set(mesText, mesText.innerHTML);
+        }
         const { rendered, hasIncoming } = renderSmsInElement(mesText, mes, false);
         const finalHtmlLen = (mesText.innerHTML || "").length;
         const finalText = mesText.textContent || "";
@@ -1373,46 +1427,54 @@ CORRECT (required when texting on phone):
     if (!container || document.getElementById("st-cm-settings")) return;
 
     const s = getSettings();
+    const isExtOn = s.extensionEnabled !== false;
     const vol = typeof s.volume === "number" ? s.volume : 0.4;
 
     const html = `
       <div id="st-cm-settings" class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-          <b>📱 Cozy Messenger</b>
+          <b>📱 Cozy Messenger <span id="st_cm_header_state" style="font-size:11px; font-weight:500; opacity:0.7;">${isExtOn ? "" : "(выкл.)"}</span></b>
           <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
-          <label class="checkbox_label"><input type="checkbox" id="st_cm_autoprompt" ${s.autoPrompt !== false ? "checked" : ""}><span>Авто-промпт для бота (строгий (in) / (out) без кавычек)</span></label>
-          <label class="checkbox_label"><input type="checkbox" id="st_cm_sound" ${s.sound !== false ? "checked" : ""}><span>Звуки СМС, голосовых и мурчания котика</span></label>
-          <label class="checkbox_label"><input type="checkbox" id="st_cm_mascot" ${s.cozyMascot !== false ? "checked" : ""}><span>🐾 Котик-маскот в шапке телефона</span></label>
-          <label class="checkbox_label"><input type="checkbox" id="st_cm_footer" ${s.showFooter !== false ? "checked" : ""}><span>Строка быстрого ответа внизу экрана</span></label>
-          <label class="checkbox_label"><input type="checkbox" id="st_cm_compact" ${s.compactMode ? "checked" : ""}><span>Компактный режим (мини-шапка)</span></label>
+          <button type="button" id="st_cm_power_btn" class="menu_button" style="width:100%; display:flex; align-items:center; justify-content:center; gap:8px; margin:4px 0 10px; padding:8px 12px; font-weight:600; border-radius:10px; border:1px solid ${isExtOn ? "rgba(74, 222, 128, 0.45)" : "rgba(255, 255, 255, 0.18)"}; background:${isExtOn ? "rgba(74, 222, 128, 0.14)" : "rgba(255, 255, 255, 0.05)"};">
+            <span id="st_cm_power_dot" style="width:9px; height:9px; border-radius:50%; background:${isExtOn ? "#4ade80" : "#94a3b8"}; box-shadow:${isExtOn ? "0 0 6px #4ade80" : "none"};"></span>
+            <span id="st_cm_power_text">${isExtOn ? "Расширение включено — Выключить" : "Расширение выключено — Включить"}</span>
+          </button>
 
-          <div style="margin-top:8px;">
-            <label for="st_cm_volume">Громкость звуков: <span id="st_cm_vol_label">${Math.round(vol * 100)}%</span></label>
-            <input type="range" id="st_cm_volume" min="0.05" max="1" step="0.05" value="${vol}" style="width:100%;">
-          </div>
+          <div id="st_cm_subsettings" style="${isExtOn ? "" : "opacity:0.45; pointer-events:none;"} transition:opacity 0.2s ease;">
+            <label class="checkbox_label"><input type="checkbox" id="st_cm_autoprompt" ${s.autoPrompt !== false ? "checked" : ""}><span>Авто-промпт для бота (строгий (in) / (out) без кавычек)</span></label>
+            <label class="checkbox_label"><input type="checkbox" id="st_cm_sound" ${s.sound !== false ? "checked" : ""}><span>Звуки СМС, голосовых и мурчания котика</span></label>
+            <label class="checkbox_label"><input type="checkbox" id="st_cm_mascot" ${s.cozyMascot !== false ? "checked" : ""}><span>🐾 Котик-маскот в шапке телефона</span></label>
+            <label class="checkbox_label"><input type="checkbox" id="st_cm_footer" ${s.showFooter !== false ? "checked" : ""}><span>Строка быстрого ответа внизу экрана</span></label>
+            <label class="checkbox_label"><input type="checkbox" id="st_cm_compact" ${s.compactMode ? "checked" : ""}><span>Компактный режим (мини-шапка)</span></label>
 
-          <div style="margin-top:8px;">
-            <label for="st_cm_theme">Тема телефона:</label>
-            <select id="st_cm_theme" class="text_pole">
-              <option value="glass" ${s.theme === "glass" ? "selected" : ""}>🧊 Liquid Glass (Матовое стекло)</option>
-              <option value="noir" ${s.theme === "noir" ? "selected" : ""}>🍷 Velvet Noir (Тёмный бархат)</option>
-              <option value="neon" ${s.theme === "neon" ? "selected" : ""}>📼 Retro Neon (Ночной неон)</option>
-              <option value="dark" ${s.theme === "dark" ? "selected" : ""}>🌙 Midnight Lo-Fi (Ночной индиго)</option>
-              <option value="latte" ${s.theme === "latte" ? "selected" : ""}>☕ Warm Latte (Тёплый латте)</option>
-              <option value="pink" ${s.theme === "pink" ? "selected" : ""}>🌸 Sakura Pink (Нежная сакура)</option>
-              <option value="matcha" ${s.theme === "matcha" ? "selected" : ""}>🍵 Cozy Matcha (Уютная матча)</option>
-            </select>
-          </div>
-
-          <div id="st_cm_preview" style="margin-top:10px;">${PREVIEW_TEMPLATE_HTML}</div>
-
-          <div class="st-cm-shelf-box">
-            <div class="st-cm-shelf-header">
-              <span>💌 Сохранённые переписки (<span id="st_cm_shelf_count">0</span>)</span>
+            <div style="margin-top:8px;">
+              <label for="st_cm_volume">Громкость звуков: <span id="st_cm_vol_label">${Math.round(vol * 100)}%</span></label>
+              <input type="range" id="st_cm_volume" min="0.05" max="1" step="0.05" value="${vol}" style="width:100%;">
             </div>
-            <div id="st_cm_shelf_list"></div>
+
+            <div style="margin-top:8px;">
+              <label for="st_cm_theme">Тема телефона:</label>
+              <select id="st_cm_theme" class="text_pole">
+                <option value="glass" ${s.theme === "glass" ? "selected" : ""}>🧊 Liquid Glass (Матовое стекло)</option>
+                <option value="noir" ${s.theme === "noir" ? "selected" : ""}>🍷 Velvet Noir (Тёмный бархат)</option>
+                <option value="neon" ${s.theme === "neon" ? "selected" : ""}>📼 Retro Neon (Ночной неон)</option>
+                <option value="dark" ${s.theme === "dark" ? "selected" : ""}>🌙 Midnight Lo-Fi (Ночной индиго)</option>
+                <option value="latte" ${s.theme === "latte" ? "selected" : ""}>☕ Warm Latte (Тёплый латте)</option>
+                <option value="pink" ${s.theme === "pink" ? "selected" : ""}>🌸 Sakura Pink (Нежная сакура)</option>
+                <option value="matcha" ${s.theme === "matcha" ? "selected" : ""}>🍵 Cozy Matcha (Уютная матча)</option>
+              </select>
+            </div>
+
+            <div id="st_cm_preview" style="margin-top:10px;">${PREVIEW_TEMPLATE_HTML}</div>
+
+            <div class="st-cm-shelf-box">
+              <div class="st-cm-shelf-header">
+                <span>💌 Сохранённые переписки (<span id="st_cm_shelf_count">0</span>)</span>
+              </div>
+              <div id="st_cm_shelf_list"></div>
+            </div>
           </div>
         </div>
       </div>`;
@@ -1421,12 +1483,52 @@ CORRECT (required when texting on phone):
     refreshSettingsPreview();
     renderFavoritesShelf();
 
+    const syncPowerUi = () => {
+      const active = s.extensionEnabled !== false;
+      const btn = document.getElementById("st_cm_power_btn");
+      const dot = document.getElementById("st_cm_power_dot");
+      const txt = document.getElementById("st_cm_power_text");
+      const sub = document.getElementById("st_cm_subsettings");
+      const hdr = document.getElementById("st_cm_header_state");
+      if (btn) {
+        btn.style.borderColor = active ? "rgba(74, 222, 128, 0.45)" : "rgba(255, 255, 255, 0.18)";
+        btn.style.background = active ? "rgba(74, 222, 128, 0.14)" : "rgba(255, 255, 255, 0.05)";
+      }
+      if (dot) {
+        dot.style.background = active ? "#4ade80" : "#94a3b8";
+        dot.style.boxShadow = active ? "0 0 6px #4ade80" : "none";
+      }
+      if (txt) {
+        txt.textContent = active ? "Расширение включено — Выключить" : "Расширение выключено — Включить";
+      }
+      if (sub) {
+        sub.style.opacity = active ? "1" : "0.45";
+        sub.style.pointerEvents = active ? "auto" : "none";
+      }
+      if (hdr) {
+        hdr.textContent = active ? "" : "(выкл.)";
+      }
+    };
+
     const save = () => {
       const ctx = window.SillyTavern?.getContext?.();
       ctx?.saveSettingsDebounced?.();
       applyTheme();
       updatePrompt();
     };
+
+    document.getElementById("st_cm_power_btn")?.addEventListener("click", () => {
+      s.extensionEnabled = s.extensionEnabled === false;
+      syncPowerUi();
+      save();
+      if (s.extensionEnabled === false) {
+        restoreChatWidgets();
+      } else {
+        hasCompletedInitialScan = false;
+        refreshSettingsPreview();
+        scanChat();
+      }
+    });
 
     document.getElementById("st_cm_autoprompt")?.addEventListener("change", (e) => {
       s.autoPrompt = e.target.checked;
@@ -1485,6 +1587,7 @@ CORRECT (required when texting on phone):
     }
 
     chatObserver = new MutationObserver((mutations) => {
+      if (getSettings().extensionEnabled === false) return;
       const externalChange = mutations.some((m) => {
         const targetEl = m.target.nodeType === 1 ? m.target : m.target.parentElement;
         return targetEl && !targetEl.closest(".st-cm-phone");
@@ -1523,6 +1626,13 @@ CORRECT (required when texting on phone):
 
     if (et.GENERATION_STARTED) {
       es.on(et.GENERATION_STARTED, () => {
+        updatePrompt();
+      });
+    }
+
+    if (et.SETTINGS_LOADED) {
+      es.on(et.SETTINGS_LOADED, () => {
+        applyTheme();
         updatePrompt();
       });
     }
